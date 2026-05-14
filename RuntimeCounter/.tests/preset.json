@@ -1,0 +1,74 @@
+{
+  "name": "Счётчик времени работы — насос котельной",
+  "description": "Выключатель насоса в котельной (привязанный сервис — Switch.On) и два виртуальных Параметра типа C_Option: один для наработки, второй для простоя. У каждого Параметра все обязательные характеристики (C_Integer, C_Long, C_Double, C_Boolean) и опциональная C_String для текстового формата. В опциях runtimeParameter/downtimeParameter выберите соответствующие Параметры. Сброс счётчика — включить C_Boolean у нужного Параметра.",
+  "options": {
+    "runtimeParameter": "",
+    "downtimeParameter": "",
+    "timeTextFormat": 0
+  },
+  "variables": {},
+  "rooms": [{ "name": "Котельная" }],
+  "accessories": [
+    {
+      "id": 100,
+      "name": "Насос",
+      "room": "Котельная",
+      "target": true,
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "Switch",
+          "name": "Насос",
+          "characteristics": [{ "type": "On", "value": false }]
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "name": "Время работы насоса",
+      "room": "Котельная",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "C_Option",
+          "name": "Время работы насоса",
+          "characteristics": [
+            { "type": "C_Integer", "value": 0 },
+            { "type": "C_Long", "value": 0 },
+            { "type": "C_Double", "value": 0 },
+            { "type": "C_Boolean", "value": false },
+            { "type": "C_String", "value": "" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "name": "Время простоя насоса",
+      "room": "Котельная",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "C_Option",
+          "name": "Время простоя насоса",
+          "characteristics": [
+            { "type": "C_Integer", "value": 0 },
+            { "type": "C_Long", "value": 0 },
+            { "type": "C_Double", "value": 0 },
+            { "type": "C_Boolean", "value": false },
+            { "type": "C_String", "value": "" }
+          ]
+        }
+      ]
+    }
+  ]
+}

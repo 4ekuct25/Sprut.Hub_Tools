@@ -1,0 +1,18 @@
+{
+  "name": "@scenario-simulator/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "scenario-sim": "./bin/scenario-sim.ts"
+  },
+  "dependencies": {
+    "@scenario-simulator/core": "*",
+    "@scenario-simulator/web": "*",
+    "citty": "^0.1.6",
+    "picocolors": "^1.1.1",
+    "chokidar": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
+  }
+}

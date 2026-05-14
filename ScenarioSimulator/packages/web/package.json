@@ -1,0 +1,17 @@
+{
+  "name": "@scenario-simulator/web",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/server.ts",
+  "exports": {
+    ".": "./src/server.ts"
+  },
+  "dependencies": {
+    "@scenario-simulator/core": "*",
+    "hono": "^4.6.0",
+    "@hono/node-server": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
+  }
+}

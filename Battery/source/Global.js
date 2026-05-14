@@ -30,8 +30,10 @@ function getBatteriesInfo(fullInfo, blackList, whiteList, notificationChannel, n
     let states = GlobalVariables["batteryStateScenario"]
     if (!states) GlobalVariables["batteryStateScenario"] = []
 
-    let black = blackListAccessories
-    let white = whiteListAccessories
+    // Копируем константы, чтобы не мутировать общие массивы верхнего уровня
+    // (между вызовами getBatteriesInfo они бы накапливались).
+    let black = blackListAccessories.slice()
+    let white = whiteListAccessories.slice()
     if (Array.isArray(actualBlackList)) { actualBlackList.forEach(function (i) { black.push(i) }) } else if (actualBlackList != undefined && actualBlackList.length > 0) black.push(actualBlackList)
     if (Array.isArray(actualWhiteList)) { actualWhiteList.forEach(function (i) { white.push(i) }) } else if (actualWhiteList != undefined && actualWhiteList.length > 0) white.push(actualWhiteList)
 

@@ -14,6 +14,11 @@ function averageRoomSensors(roomName, averageDeviceId) {
   let tempSensorCount = 0;
   let humSensorCount = 0;
 
+  // Идентификатор виртуального устройства приводим к строке для сравнения
+  // с `accessory.getUUID()` (тот всегда строка) — так README может писать
+  // ACCESSORY_ID как число `42` или как строку `"42"`, оба варианта работают.
+  const averageDeviceIdStr = String(averageDeviceId);
+
   // Получение всех комнат
   const rooms = Hub.getRooms();
 
@@ -28,7 +33,7 @@ function averageRoomSensors(roomName, averageDeviceId) {
       roomAccessories.filter(function loop(accessory) {
         // Проверка статуса аксессуара (онлайн и не виртуальный)
         const status = accessory.getService(HS.AccessoryInformation).getCharacteristic(HC.C_Online).getValue() == true;
-        return status && accessory.getUUID() !== averageDeviceId;
+        return status && accessory.getUUID() !== averageDeviceIdStr;
       }).forEach(function loop(accessory) {
         // Получение сервисов температуры и влажности
         const tempService = accessory.getService(HS.TemperatureSensor);

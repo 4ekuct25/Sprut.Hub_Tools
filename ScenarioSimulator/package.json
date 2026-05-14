@@ -1,0 +1,29 @@
+{
+  "name": "scenario-simulator-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Sprut.Hub scenario emulator and test runner",
+  "workspaces": [
+    "packages/core",
+    "packages/cli",
+    "packages/web"
+  ],
+  "scripts": {
+    "generate": "bun run scripts/generate-enums.ts && bun run scripts/generate-char-metadata.ts",
+    "build": "tsc -b packages/core packages/cli packages/web",
+    "typecheck": "tsc -b --noEmit packages/core packages/cli packages/web",
+    "test": "bun test packages/core",
+    "cli": "bun run packages/cli/bin/scenario-sim.ts",
+    "serve": "bun run packages/cli/bin/scenario-sim.ts serve"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0",
+    "node": ">=22.0.0"
+  }
+}

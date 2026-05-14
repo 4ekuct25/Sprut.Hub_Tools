@@ -1,5 +1,5 @@
 // Типы батарей
-let batteryTypes = ["AA", "AAA", "CR2032", "CR2450", "CR2025", "CR1632", "CR3032", "CR2477", "AG1", "AG3", "ER14250", "2CR5", "18650", "14500", "16340", "CR-P2", "SR44", "3LR12", "CR17450"];
+let batteryTypes = ["AA", "AAA", "CR2032", "CR2450", "CR2025", "CR1632", "CR3032", "CR2477", "AG1", "AG3", "ER14250", "2CR5", "18650", "14500", "16340", "CR-P2", "SR44", "3LR12", "CR17450", "CR2430"];
 // Типы зарядки
 let chargingTypes = ["USB Type-C", "Micro USB", "Mini USB", "Lightning", "5521 12V", "5525 12V", "5521 9V", "5525 9V", "Солнечная панель", "Проприетарное зарядное устройство"]
 
@@ -197,24 +197,24 @@ function trigger(source, value, variables, options) {
         if (lowBattery && !charging) {
 
             if (!variables.notificationSend) {
-                variables.notificationSend = true
-                
                 // Формируем сообщение в зависимости от канала
                 let message = formatNotificationMessage(state, date, options.notificationChannel)
-                
+
                 // Преобразуем строку клиентов в массив
                 let clientsArray = []
                 if (options.notificationClients && options.notificationClients.trim() !== "") {
                     clientsArray = options.notificationClients.split(',').map(client => client.trim()).filter(client => client !== "")
                 }
-                
-                // Отправляем уведомление через новую функцию
+
+                // Отправляем уведомление и помечаем как отправленное только после успешной отправки.
+                // Если sendNotification бросит исключение, при следующем триггере попробуем снова.
                 sendNotification(
                     message,
                     options.notificationChannel,
                     clientsArray,
                     options.silentNotification
                 )
+                variables.notificationSend = true
             }
 
             if (options.changeName) service.setName("❗️ " + date)
@@ -237,31 +237,36 @@ function trigger(source, value, variables, options) {
  * @returns {String} Отформатированное сообщение
  */
 function formatNotificationMessage(state, date, channel) {
+    // Защита от undefined/null значений из опций — без неё `state.placement.trim()`
+    // упадёт, если опция не была заполнена пользователем.
+    const placement = (state.placement != null && state.placement !== "") ? String(state.placement).trim() : ""
+    const comment = (state.comment != null && state.comment !== "") ? String(state.comment).trim() : ""
+
     if (channel && channel.startsWith("Telegram")) {
         // Форматирование для Telegram - сразу строка
         let text = "❗️ *Батарея разряжена!*\n"
         text += state.name + " в " + state.room + " (ID: " + state.uuid + ")\n"
-        if (state.placement != "") text += state.placement.trim() + "\n"
+        if (placement) text += placement + "\n"
         text += "\n"
         text += "Заряд: " + state.level + "%\n"
         if (state.batteryType != "" && state.batteryType != "-") text += "Тип: " + state.batteryType + " (" + state.quantity + " шт.)\n"
         if (state.chargingType != "" && state.chargingType != "-") text += "Заряжается через: " + state.chargingType + " \n"
         text += "\n"
-        if (state.comment != "") text += state.comment.trim() + "\n"
+        if (comment) text += comment + "\n"
         text += "Дата " + (state.chargingType != "" ? "зарядки" : "замены батареи") + ": " + date.replaceAll("-", ".")
-        
+
         return text
     } else {
         // Форматирование для других каналов
         let text = "❗️ Батарея разряжена! "
         text += state.name + " в " + state.room + " (ID: " + state.uuid + ") "
-        if (state.placement != "") text += " " + state.placement.trim()
+        if (placement) text += " " + placement
         text += ". Заряд: " + state.level + "%"
         if (state.batteryType != "") text += " Тип: " + state.batteryType + " (" + state.quantity + " шт.)"
         if (state.chargingType != "") text += " Заряжается через: " + state.chargingType + " "
-        if (state.comment != "") text += state.comment.trim()
+        if (comment) text += comment
         text += "Дата " + (state.chargingType != "" ? "зарядки" : "замены батареи") + ": " + date.replaceAll("-", ".")
-        
+
         return text
     }
 }

@@ -162,27 +162,20 @@ function myFunction(value) {
  * @returns {Array} Список сервисов с характеристиками
  */
 function getServicesByServiceAndCharacteristicType(serviceTypes, characteristicTypes) {
-  let sortedServicesList = []
-  let unsortedServicesList = []
+  let unsortedServicesList = [];
   Hub.getAccessories().forEach((a) => {
-      a.getServices().filter((s) => serviceTypes.indexOf(s.getType()) >= 0).forEach((s) => {
-          let characteristic = undefined
-          characteristicTypes.forEach(c => {
-              if (!characteristic) {
-                  let chr = s.getCharacteristic(c);
-                  if (chr) characteristic = chr
-              }
-          })
-          if (characteristic) {
-              let displayname = getDeviceName(s)
+      a.getServices()
+          .filter((s) => serviceTypes.indexOf(s.getType()) >= 0)
+          .filter((s) => characteristicTypes.some((c) => s.getCharacteristic(c)))
+          .forEach((s) => {
+              let name = getDeviceName(s);
               unsortedServicesList.push({
-                  name: { ru: displayname, en: displayname },
+                  name: { ru: name, en: name },
                   value: s.getUUID()
               });
-          }
-      })
+          });
   });
-  sortedServicesList.push({ name: { ru: "Не выбрано", en: "Not selected", en: "" }, value: '' })
-  unsortedServicesList.sort((a, b) => a.name.ru.localeCompare(b.name.ru)).forEach((s) => sortedServicesList.push(s))
-  return sortedServicesList
+  let sortedServicesList = [{ name: { ru: "Не выбрано", en: "Not selected" }, value: '' }];
+  unsortedServicesList.sort((a, b) => a.name.ru.localeCompare(b.name.ru)).forEach((s) => sortedServicesList.push(s));
+  return sortedServicesList;
 }
