@@ -1,0 +1,80 @@
+{
+  "name": "Виртуальный термостат — спальня",
+  "description": "Спальня с термостатом, датчиком температуры и двумя реле (нагрев/охлаждение). Логика сценария висит на сервисе Thermostat.",
+  "options": {
+    "sensor": "",
+    "heatingRelay": "",
+    "coolingRelay": "",
+    "fanTempStep": 0.5,
+    "fanSpeedManualLock": true,
+    "failureBehavior": 0,
+    "failureTimeout": 240,
+    "debug": true
+  },
+  "variables": {},
+  "rooms": [{ "name": "Спальня" }],
+  "accessories": [
+    {
+      "id": 100,
+      "name": "Термостат",
+      "room": "Спальня",
+      "target": true,
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "Thermostat",
+          "name": "Термостат",
+          "characteristics": [
+            { "type": "CurrentHeatingCoolingState", "value": 0 },
+            { "type": "TargetHeatingCoolingState", "value": 0 },
+            { "type": "CurrentTemperature", "value": 20 },
+            { "type": "TargetTemperature", "value": 22 },
+            { "type": "C_FanSpeed", "value": 0 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "name": "Датчик температуры",
+      "room": "Спальня",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "TemperatureSensor",
+          "characteristics": [{ "type": "CurrentTemperature", "value": 21 }]
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "name": "Реле нагрева",
+      "room": "Спальня",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        { "type": "Switch", "characteristics": [{ "type": "On", "value": false }] }
+      ]
+    },
+    {
+      "id": 103,
+      "name": "Реле охлаждения",
+      "room": "Спальня",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        { "type": "Switch", "characteristics": [{ "type": "On", "value": false }] }
+      ]
+    }
+  ]
+}

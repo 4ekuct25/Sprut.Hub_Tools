@@ -15,13 +15,13 @@ info = {
     onStart: true,
 
     sourceServices: [HS.Thermostat],
-    sourceCharacteristics: [HC.CurrentHeatingCoolingState, HC.TargetHeatingCoolingState, HC.CurrentTemperature, HC.TargetTemperature, HC.C_FanSpeed],
+    sourceCharacteristics: [HC.CurrentHeatingCoolingState, HC.TargetHeatingCoolingState, HC.CurrentTemperature, HC.TargetTemperature, HC.HeatingThresholdTemperature, HC.CoolingThresholdTemperature, HC.C_FanSpeed],
 
     options: {
         desc: {
             name: {
-                en: "DESCRIPTION",
-                ru: "ОПИСАНИЕ"
+                en: "  DESCRIPTION",
+                ru: "  ОПИСАНИЕ"
             },
             desc: scenarioDescription,
             type: "String",
@@ -70,6 +70,94 @@ info = {
             formType: "list",
             values: servicesList
         },
+        thermostatLogic: {
+            name: {
+                en: "  THERMOSTAT LOGIC",
+                ru: "  ЛОГИКА ТЕРМОСТАТА"
+            },
+            type: "String",
+            value: "",
+            formType: "status"
+        },
+        emulateThermostat: {
+            name: {
+                en: "Emulate plain thermostat",
+                ru: "Эмуляция обычного термостата"
+            },
+            desc: {
+                ru: "Если включено, сценарий сам вычисляет Текущий режим термостата (нагревает / охлаждает / выключен) на основе Целевого режима, текущей и целевой температур (для режима Автоматически — Порогов нагрева/охлаждения). В этом случае базовый сценарий 'Обычный термостат' можно не подключать. Целевая влажность не поддерживается.",
+                en: "If enabled, the scenario calculates the Current heating/cooling state (heating / cooling / off) itself based on Target state, current and target temperatures (for Auto mode — Heating/Cooling Threshold). In this case the built-in 'Plain thermostat' scenario does not need to be connected. Target humidity is not supported."
+            },
+            type: "Boolean",
+            value: false
+        },
+        hysteresis: {
+            name: {
+                en: "Hysteresis (°C)",
+                ru: "Гистерезис (°C)"
+            },
+            desc: {
+                ru: "Зона нечувствительности при эмуляции термостата. Нагрев включается, когда температура ниже целевой на гистерезис, и выключается, когда выше целевой на гистерезис. Охлаждение — симметрично. По умолчанию 0.5 °C.",
+                en: "Deadband used by the thermostat emulation. Heating turns on when temperature is below target by the hysteresis value and turns off when above target by the same value. Cooling — symmetrically. Default 0.5 °C."
+            },
+            type: "Double",
+            value: 0.5,
+            minValue: 0.0,
+            maxValue: 5.0,
+            minStep: 0.1
+        },
+        failure: {
+            name: {
+                en: "  SENSOR FAILURE",
+                ru: "  ОТКАЗ ДАТЧИКА"
+            },
+            type: "String",
+            value: "",
+            formType: "status"
+        },
+        failureBehavior: {
+            name: {
+                en: "Sensor failure behavior",
+                ru: "Поведение при отказе датчика температуры"
+            },
+            desc: {
+                ru: "Что делать с реле и термостатом, если от датчика температуры не поступали данные дольше заданного времени.\n• 'Отключить' — перевести термостат в режим Выключен (Целевой режим = 0) и отключить оба реле.\n• 'Нагрев' — Целевой режим не меняется, включается только реле нагрева.\n• 'Охлаждение' — Целевой режим не меняется, включается только реле охлаждения.\n• 'Ничего не делать' — состояние термостата и реле не трогается.\nПосле восстановления данных с датчика управление реле возвращается в обычный режим.",
+                en: "What to do with the relay and thermostat if no data has been received from the temperature sensor for longer than the specified time.\n• 'Turn off' — switch thermostat to Off (Target state = 0) and turn off both relays.\n• 'Heat' — Target state is not changed, only the heating relay is turned on.\n• 'Cool' — Target state is not changed, only the cooling relay is turned on.\n• 'Do nothing' — thermostat and relay state are not touched.\nAfter sensor data is restored, relay control returns to normal mode."
+            },
+            type: "Integer",
+            value: 0,
+            formType: "list",
+            values: [
+                { value: 0, name: { en: "Turn off", ru: "Отключить" } },
+                { value: 1, name: { en: "Heat", ru: "Нагрев" } },
+                { value: 2, name: { en: "Cool", ru: "Охлаждение" } },
+                { value: 3, name: { en: "Do nothing", ru: "Ничего не делать" } }
+            ]
+        },
+        failureTimeout: {
+            name: {
+                en: "Failure timeout (minutes)",
+                ru: "Время до отказа (минуты)"
+            },
+            desc: {
+                ru: "Через сколько минут отсутствия данных с датчика температуры считать его отказавшим. Кратно 15 минутам, минимум 15. По умолчанию 240 (4 часа). Проверка выполняется каждые 15 минут.",
+                en: "After how many minutes without data from the temperature sensor consider it failed. Multiple of 15, minimum 15. Default 240 (4 hours). Check is performed every 15 minutes."
+            },
+            type: "Integer",
+            value: 240,
+            minValue: 15,
+            maxValue: 10080,
+            minStep: 15
+        },
+        fan: {
+            name: {
+                en: "  FAN",
+                ru: "  ВЕНТИЛЯТОР"
+            },
+            type: "String",
+            value: "",
+            formType: "status"
+        },
         fanTempStep: {
             name: {
                 en: "Temperature difference for fan",
@@ -97,49 +185,26 @@ info = {
             type: "Boolean",
             value: true
         },
-        forceRelayState: {
+        other: {
             name: {
-                en: "Force relay state on temperature change",
-                ru: "Принудительно устанавливать состояние реле при изменении температуры"
+                en: "  OTHER",
+                ru: "  ПРОЧЕЕ"
+            },
+            type: "String",
+            value: "",
+            formType: "status"
+        },
+        debug: {
+            name: {
+                en: "Debug",
+                ru: "Отладка"
             },
             desc: {
-                ru: "Если включено, состояние реле будет принудительно устанавливаться при каждом изменении температуры, а не только при изменении режима термостата. Сценарий сам отслеживает, когда реле не в сети и устанавливает нужное состояние, когда оно подключается к хабу - для этого эту опцию включать не нужно.",
-                en: "If enabled, relay state will be forcibly set on every temperature change, not only when thermostat mode changes. The scenario itself monitors when the relay is not online and sets the appropriate state when it connects to the hub - for this, this option does not need to be enabled."
+                ru: "Выводить в лог информационные сообщения о работе сценария (изменения температуры, скорости вентилятора, режима эмуляции и т.п.). Предупреждения и ошибки логируются всегда.",
+                en: "Output informational log messages about scenario activity (temperature changes, fan speed, emulation mode etc.). Warnings and errors are always logged."
             },
             type: "Boolean",
             value: false
-        },
-        failureBehavior: {
-            name: {
-                en: "Sensor failure behavior",
-                ru: "Поведение при отказе датчика температуры"
-            },
-            desc: {
-                ru: "Что делать с реле, если от датчика температуры не поступали данные дольше заданного времени. 'Отключать' — выключить оба реле (нагрев и охлаждение). 'Включать' — включить реле, соответствующее целевому режиму термостата (нагрев или охлаждение). После восстановления данных с датчика управление реле возвращается в обычный режим.",
-                en: "What to do with the relay if no data has been received from the temperature sensor for longer than the specified time. 'Turn off' — turn off both relays (heating and cooling). 'Turn on' — turn on the relay corresponding to the thermostat's target mode (heating or cooling). After the sensor data is restored, relay control returns to normal mode."
-            },
-            type: "Integer",
-            value: 0,
-            formType: "list",
-            values: [
-                { value: 0, name: { en: "Turn off", ru: "Отключать" } },
-                { value: 1, name: { en: "Turn on", ru: "Включать" } }
-            ]
-        },
-        failureTimeout: {
-            name: {
-                en: "Failure timeout (minutes)",
-                ru: "Время до отказа (минуты)"
-            },
-            desc: {
-                ru: "Через сколько минут отсутствия данных с датчика температуры считать его отказавшим. Кратно 15 минутам, минимум 15. По умолчанию 240 (4 часа). Проверка выполняется каждые 15 минут.",
-                en: "After how many minutes without data from the temperature sensor consider it failed. Multiple of 15, minimum 15. Default 240 (4 hours). Check is performed every 15 minutes."
-            },
-            type: "Integer",
-            value: 240,
-            minValue: 15,
-            maxValue: 10080,
-            minStep: 15
         }
     },
     variables: {
@@ -152,31 +217,41 @@ info = {
         fanSpeedManuallySet: false,
         midnightTask: undefined,
         failureCheckTask: undefined,
-        sensorFailed: false
+        sensorFailed: false,
+        // Последний целевой режим, установленный пользователем (не сценарием).
+        // При отказе датчика в режиме «Отключить» сценарий сбрасывает TargetHCState в 0,
+        // а после восстановления возвращает сюда сохранённое значение.
+        lastUserTargetState: undefined
     }
 };
-
-// Вывод в лог информационные сообщения о работе сценария
-let debug = false
 
 function trigger(source, value, variables, options, context) {
     try {
         const characteristicType = source.getType()
         const service = source.getService()
 
-        if (characteristicType === HC.CurrentHeatingCoolingState || characteristicType === HC.TargetHeatingCoolingState) {
-            // Логика управления реле нагрева/охлаждения
+        logDebug(`trigger: характеристика ${characteristicType}, значение ${value}, контекст ${context}`, source, options.debug)
+
+        // Запоминаем последний целевой режим, выставленный пользователем (или базовой логикой).
+        // Self changes (сценарий сам ставит 0 при отказе) фильтруем — иначе запомним 0.
+        if (characteristicType === HC.TargetHeatingCoolingState && !isSelfChangeByContext(context)) {
+            if (variables.sensorFailed && value !== 0) {
+                logError(`Датчик температуры отказал. Режим будет сброшен в Выключен. После восстановления данных режим вернётся к ${value}.`, source)
+            }
+            variables.lastUserTargetState = value
+        }
+
+        if (characteristicType === HC.C_FanSpeed) {
+            handleFanSpeedChange(service, value, variables, options, context)
+        } else {
+            // Эмуляция обычного термостата: пересчёт CurrentHeatingCoolingState
+            if (options.emulateThermostat) {
+                computeAndSetCurrentState(service, options)
+            }
+            // Управление реле: стандартное поведение — реагируем на любое изменение
+            // характеристик термостата (целевой режим, текущий режим, температуры, пороги).
             handleHeatingCoolingLogic(source, options, variables)
             updateFanSpeed(service, variables, options)
-        } else if (characteristicType === HC.CurrentTemperature || characteristicType === HC.TargetTemperature) {
-            // Логика управления вентилятором на основе разницы температур
-            updateFanSpeed(service, variables, options)
-            if (options.forceRelayState) {
-                handleHeatingCoolingLogic(source, options, variables)
-            }
-        } else if (characteristicType === HC.C_FanSpeed) {
-            // Изменение скорости вентилятора
-            handleFanSpeedChange(service, value, variables, options, context)
         }
 
         // Подписка на датчик температуры
@@ -194,26 +269,32 @@ function trigger(source, value, variables, options, context) {
 
 function handleFanSpeedChange(service, value, variables, options, context) {
     const isSelfChange = isSelfChangeByContext(context)
-    // Если изменение сделал НЕ сам сценарий - это ручное изменение пользователем
-    if (!isSelfChange) {
-        if (value == 0) {
-            // Пользователь установил Авто (0) - сбрасываем флаг
-            variables.fanSpeedManuallySet = false
-            updateFanSpeed(service, variables, options)
-        } else {
-            // Пользователь установил конкретную скорость - ставим флаг только если включена ручная фиксация
-            const fanSpeedChar = service.getCharacteristic(HC.C_FanSpeed)
-            if (fanSpeedChar.getMinValue() > 0) return
-            if (options.fanSpeedManualLock == true) {
-                variables.fanSpeedManuallySet = true
-            }
-        }
+    const fanSpeedChar = service.getCharacteristic(HC.C_FanSpeed)
+    if (isSelfChange) {
+        logDebug(`Скорость вентилятора изменена самим сценарием — игнорируем`, fanSpeedChar, options.debug)
+        return
+    }
+    if (value == 0) {
+        logDebug(`Пользователь поставил Авто (0) — снимаем фиксацию скорости`, fanSpeedChar, options.debug)
+        variables.fanSpeedManuallySet = false
+        updateFanSpeed(service, variables, options)
+        return
+    }
+    // Пользователь установил конкретную скорость - ставим флаг только если включена ручная фиксация
+    if (fanSpeedChar.getMinValue() > 0) {
+        logDebug(`У вентилятора нет режима Авто — флаг ручной фиксации не ставим`, fanSpeedChar, options.debug)
+        return
+    }
+    if (options.fanSpeedManualLock == true) {
+        logDebug(`Пользователь установил скорость ${value} вручную — фиксируем`, fanSpeedChar, options.debug)
+        variables.fanSpeedManuallySet = true
     }
 }
 
 function handleHeatingCoolingLogic(source, options, variables) {
     // При отказе датчика управление реле берёт на себя applyFailureBehavior
     if (variables && variables.sensorFailed) {
+        logDebug("Управление реле в режиме 'отказ датчика'", source, options.debug)
         applyFailureBehavior(source.getService(), options, source)
         return
     }
@@ -222,26 +303,129 @@ function handleHeatingCoolingLogic(source, options, variables) {
     const heatingRelay = getDevice(options, "heatingRelay")
     const coolingRelay = getDevice(options, "coolingRelay")
 
-    const currentState = service.getCharacteristic(HC.CurrentHeatingCoolingState).getValue()
-    const targetState = service.getCharacteristic(HC.TargetHeatingCoolingState).getValue()
+    const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
+    const targetStateChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    const currentState = currentStateChar ? currentStateChar.getValue() : 0
+    const targetState = targetStateChar ? targetStateChar.getValue() : 0
 
-    // Выключено
-    if (targetState == 0 || currentState == 0) {
-        setRelayValue(heatingRelay, false, source)
-        setRelayValue(coolingRelay, false, source)
+    // Выключено / Вентилятор / Осушитель — оба реле выкл
+    if (targetState == 0 || targetState == -1 || targetState == -2) {
+        logDebug(`Целевой режим ${targetState} (Off/Fan/Dry) — отключаем оба реле`, source, options.debug)
+        setRelayValue(heatingRelay, false, source, options.debug)
+        setRelayValue(coolingRelay, false, source, options.debug)
         return
     }
-    // Нагрев
-    if ((targetState == 1 || targetState == 3) && currentState == 1) {
-        setRelayValue(heatingRelay, true, source)
-        setRelayValue(coolingRelay, false, source)
+    // Дальше решает CurrentHeatingCoolingState (значения 0/1/2)
+    if (currentState == 1) {
+        logDebug(`Текущий режим = Нагрев → реле нагрева ON, охлаждения OFF`, source, options.debug)
+        setRelayValue(heatingRelay, true, source, options.debug)
+        setRelayValue(coolingRelay, false, source, options.debug)
         return
     }
-    // Охлаждение
-    if ((targetState == 2 || targetState == 3) && currentState == 2) {
-        setRelayValue(heatingRelay, false, source)
-        setRelayValue(coolingRelay, true, source)
+    if (currentState == 2) {
+        logDebug(`Текущий режим = Охлаждение → реле охлаждения ON, нагрева OFF`, source, options.debug)
+        setRelayValue(heatingRelay, false, source, options.debug)
+        setRelayValue(coolingRelay, true, source, options.debug)
+        return
     }
+    // currentState == 0
+    logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF`, source, options.debug)
+    setRelayValue(heatingRelay, false, source, options.debug)
+    setRelayValue(coolingRelay, false, source, options.debug)
+}
+
+// Вычисляет CurrentHeatingCoolingState (0/1/2) по целевому режиму и температурам с гистерезисом.
+// При эмуляции термостата сам устанавливает значение на характеристику.
+// Возвращает новое значение или undefined, если ничего не меняли.
+function computeAndSetCurrentState(service, options) {
+    const targetStateChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
+    const currentTempChar = service.getCharacteristic(HC.CurrentTemperature)
+    if (!targetStateChar || !currentStateChar || !currentTempChar) {
+        logDebug("Эмуляция термостата: нет нужных характеристик у термостата, пропуск", currentStateChar || targetStateChar || currentTempChar, options.debug)
+        return undefined
+    }
+
+    const targetState = targetStateChar.getValue()
+    const currentState = currentStateChar.getValue()
+    const currentTemp = currentTempChar.getValue()
+    if (currentTemp == null) {
+        logDebug("Эмуляция термостата: текущая температура null, пропуск", currentTempChar, options.debug)
+        return undefined
+    }
+
+    const hysteresis = options.hysteresis != null ? options.hysteresis : 0.5
+    logDebug(`Эмуляция: target=${targetState}, current=${currentState}, temp=${currentTemp}°C, h=${hysteresis}`, currentStateChar, options.debug)
+    const next = decideCurrentState(service, targetState, currentState, currentTemp, hysteresis)
+    if (next == null) {
+        logDebug("Эмуляция термостата: решение не принято (неизвестный режим)", currentStateChar, options.debug)
+        return undefined
+    }
+    if (next !== currentState) {
+        currentStateChar.setValue(next)
+        logDebug(`Эмуляция термостата: текущий режим → ${next}`, currentStateChar, options.debug)
+    } else {
+        logDebug(`Эмуляция термостата. Текущий режим совпадает с новым`, options.debug)
+    }
+    return next
+}
+
+// Вычисляет следующее значение CurrentHeatingCoolingState. Без побочных эффектов.
+function decideCurrentState(service, targetState, currentState, currentTemp, hysteresis) {
+    // OFF / FAN_ONLY / DRY → текущий режим всегда Выключен
+    if (targetState == 0 || targetState == -1 || targetState == -2) return 0
+
+    // HEAT / ECO → используется TargetTemperature
+    if (targetState == 1 || targetState == -3) {
+        const targetTemp = getCharValue(service, HC.TargetTemperature)
+        if (targetTemp == null) return 0
+        // Сейчас греем — выключаем, когда нагрелись выше target+hysteresis
+        if (currentState == 1) return currentTemp >= targetTemp + hysteresis ? 0 : 1
+        // Иначе — включаем нагрев, когда температура опустилась ниже target-hysteresis
+        return currentTemp <= targetTemp - hysteresis ? 1 : 0
+    }
+
+    // COOL → используется TargetTemperature
+    if (targetState == 2) {
+        const targetTemp = getCharValue(service, HC.TargetTemperature)
+        if (targetTemp == null) return 0
+        if (currentState == 2) return currentTemp <= targetTemp - hysteresis ? 0 : 2
+        return currentTemp >= targetTemp + hysteresis ? 2 : 0
+    }
+
+    // AUTO → используются HeatingThresholdTemperature и CoolingThresholdTemperature.
+    // Если у термостата этих порогов нет — фолбэк на TargetTemperature (используется как обе точки).
+    if (targetState == 3) {
+        let heatThr = getCharValue(service, HC.HeatingThresholdTemperature)
+        let coolThr = getCharValue(service, HC.CoolingThresholdTemperature)
+        if (heatThr == null && coolThr == null) {
+            const targetTemp = getCharValue(service, HC.TargetTemperature)
+            if (targetTemp == null) return 0
+            heatThr = targetTemp
+            coolThr = targetTemp
+        }
+        // Если в текущий момент уже греем — выключаемся при достижении heatThr+hysteresis
+        if (currentState == 1) {
+            if (heatThr != null && currentTemp >= heatThr + hysteresis) return 0
+            return 1
+        }
+        // Если уже охлаждаем — выключаемся при достижении coolThr-hysteresis
+        if (currentState == 2) {
+            if (coolThr != null && currentTemp <= coolThr - hysteresis) return 0
+            return 2
+        }
+        // Из OFF включаем нагрев или охлаждение при выходе за пороги
+        if (heatThr != null && currentTemp <= heatThr - hysteresis) return 1
+        if (coolThr != null && currentTemp >= coolThr + hysteresis) return 2
+        return 0
+    }
+
+    return null
+}
+
+function getCharValue(service, type) {
+    const c = service.getCharacteristic(type)
+    return c ? c.getValue() : null
 }
 
 function subscribeToTemperatureSensor(source, service, variables, options, context) {
@@ -256,10 +440,15 @@ function subscribeToTemperatureSensor(source, service, variables, options, conte
 
     if (!variables.subscribe || variables.subscribed != true) {
         showSubscribeMessage(options, context)
+        logDebug(`Создаём подписку на изменения датчика (UUID ${options.sensor})`, source, options.debug)
         let subscribe = Hub.subscribeWithCondition("", "", [HS.TemperatureSensor, HS.Thermostat], [HC.CurrentTemperature], function (sensorSource, sensorValue) {
             let sensorService = sensorSource.getService()
             let isSelected = sensorService.getUUID() == options.sensor
             if (isSelected && currentTemperatureCharacteristic) {
+                // Свежий callback подписки означает, что датчик жив.
+                // Если был отказ — восстанавливаем ДО записи значения, чтобы при последующем
+                // handleHeatingCoolingLogic уже работала обычная логика.
+                recoverFromSensorFailure(service, variables, options, sensorSource)
                 setValueFromSensor(sensorSource, variables, options, currentTemperatureCharacteristic)
             }
         })
@@ -267,9 +456,10 @@ function subscribeToTemperatureSensor(source, service, variables, options, conte
         variables.subscribed = true
     }
     if (!variables.midnightTask) {
+        logDebug("Создаём cron задачу полуночного обновления", source, options.debug)
         variables.midnightTask = Cron.schedule("0 0 0 * * *", function () {
             setValueFromSensor(tempSensorSource, variables, options, currentTemperatureCharacteristic)
-            logInfo("Полуночное обновление", source, debug)
+            logDebug("Полуночное обновление", source, options.debug)
         });
     }
 }
@@ -285,21 +475,24 @@ function subscribeToRelayState(service, variables, options) {
     if ((heatingRelay || coolingRelay) && (!variables.relaySubscribe || variables.relaySubscribed != true) && thermostatSource) {
         const heatingRelayAccessoryId = getAccessoryIdFromUUID(options.heatingRelay)
         const coolingRelayAccessoryId = getAccessoryIdFromUUID(options.coolingRelay)
+        logDebug(`Создаём подписку на онлайн-статус реле (heat=${heatingRelayAccessoryId}, cool=${coolingRelayAccessoryId})`, thermostatSource, options.debug)
 
         let subscribe = Hub.subscribeWithCondition("", "", [HS.AccessoryInformation], [HC.C_Online], function (onlineSource, onlineValue) {
             if (onlineValue != true) return
 
             // Получаем идентификатор аксессуара и сравниваем с нашими реле
             const accessoryId = getAccessoryIdFromUUID(onlineSource.getUUID())
-            if (accessoryId == heatingRelayAccessoryId || accessoryId == coolingRelayAccessoryId)
+            if (accessoryId == heatingRelayAccessoryId || accessoryId == coolingRelayAccessoryId) {
+                logDebug(`Реле ${accessoryId} вернулось в сеть — пересчитываем состояние`, thermostatSource, options.debug)
                 handleHeatingCoolingLogic(thermostatSource, options, variables)
+            }
         })
         variables.relaySubscribe = subscribe
         variables.relaySubscribed = true
     }
 }
 
-function setRelayValue(relay, value, source) {
+function setRelayValue(relay, value, source, debug) {
     if (!relay) return
 
     try {
@@ -308,6 +501,10 @@ function setRelayValue(relay, value, source) {
         const status = relayAccessory.getService(HS.AccessoryInformation).getCharacteristic(HC.C_Online).getValue() == true
         if (!status)
             logError(`Реле ${getDeviceName(relay)} не в сети`, source)
+        const prev = onChar.getValue()
+        if (prev !== value) {
+            logDebug(`Реле ${getDeviceName(relay)}: ${prev} → ${value}`, source, debug)
+        }
         onChar.setValue(value)
     } catch (e) {
         logError(`Ошибка при установке значения реле ${getDeviceName(relay)}: ${e.toString()}`, source)
@@ -316,20 +513,29 @@ function setRelayValue(relay, value, source) {
 
 function updateFanSpeed(service, variables, options) {
     try {
-        if (variables.fanSpeedManuallySet) return
-
         const fanSpeedChar = service.getCharacteristic(HC.C_FanSpeed)
-        if (!fanSpeedChar) return
+        if (!fanSpeedChar) {
+            // Termостат не поддерживает C_FanSpeed — debug пропускаем (это норма)
+            return
+        }
+
+        if (variables.fanSpeedManuallySet) {
+            logDebug(`Скорость вентилятора зафиксирована пользователем (fanSpeedManuallySet=true) — пропуск. Поставьте Авто (0), чтобы вернуть автоматический режим.`, fanSpeedChar, options.debug)
+            return
+        }
 
         const maxSpeed = fanSpeedChar.getMaxValue()
 
         // Если термостат выключен, устанавливаем минимальную скорость вентилятора
-        const currentState = service.getCharacteristic(HC.CurrentHeatingCoolingState).getValue()
+        const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
+        const currentState = currentStateChar ? currentStateChar.getValue() : 0
         if (currentState == 0) {
             const currentSpeed = fanSpeedChar.getValue()
             if (currentSpeed != 1) {
                 fanSpeedChar.setValue(1)
-                logInfo(`Скорость вентилятора установлена: 1 (термостат выключен)`, fanSpeedChar, debug)
+                logDebug(`Скорость вентилятора установлена: 1 (текущий режим = Выключен)`, fanSpeedChar, options.debug)
+            } else {
+                logDebug(`Текущий режим = Выключен → скорость остаётся 1`, fanSpeedChar, options.debug)
             }
             return
         }
@@ -339,6 +545,7 @@ function updateFanSpeed(service, variables, options) {
         const fanTempStep = options.fanTempStep || 0.5
 
         if (currentTemp == null || targetTemp == null) {
+            logDebug(`Скорость вентилятора: temp/target = ${currentTemp}/${targetTemp} (null) — пропуск`, fanSpeedChar, options.debug)
             return
         }
 
@@ -356,7 +563,7 @@ function updateFanSpeed(service, variables, options) {
         } else if (diff >= fanTempStep) {
             speed = 2
         }
-        
+
         // Ограничиваем скорость максимальным значением
         if (speed > maxSpeed) {
             speed = maxSpeed
@@ -365,11 +572,12 @@ function updateFanSpeed(service, variables, options) {
         const currentSpeed = fanSpeedChar.getValue()
         if (currentSpeed != speed) {
             fanSpeedChar.setValue(speed)
-            // Используем fanSpeedChar для логирования, так как это источник изменения
-            logInfo(`Скорость вентилятора установлена: ${speed} (разница температур: ${diff.toFixed(2)}°C)`, fanSpeedChar, debug)
+            logDebug(`Скорость вентилятора: ${currentSpeed} → ${speed} (разница ${diff.toFixed(2)}°C, шаг ${fanTempStep})`, fanSpeedChar, options.debug)
+        } else {
+            logDebug(`Скорость вентилятора остаётся ${speed} (разница ${diff.toFixed(2)}°C, шаг ${fanTempStep})`, fanSpeedChar, options.debug)
         }
     } catch (e) {
-        // Игнорируем ошибки - это опциональная функция
+        logError("Ошибка обновления скорости вентилятора: " + e.toString())
     }
 }
 
@@ -384,7 +592,7 @@ function setValueFromSensor(sensorSource, variables, options, currentTemperature
         const sensorValue = sensorSource.getValue()
         currentTemperatureCharacteristic.setValue(sensorValue)
         if (variables.lastTemp != sensorValue) {
-            logInfo(`Значение на термостат установлено: ${sensorValue}°C`, sensorSource, debug)
+            logDebug(`Значение на термостат установлено: ${sensorValue}°C`, sensorSource, options.debug)
             variables.lastTemp = sensorValue
             variables.lastUpdateTime = Date.now();
         }
@@ -409,6 +617,14 @@ function showSubscribeMessage(options, context) {
     }
 }
 
+// Описание поведения при отказе датчика для логов
+function describeFailureBehavior(behavior) {
+    if (behavior == 1) return "включаем реле нагрева"
+    if (behavior == 2) return "включаем реле охлаждения"
+    if (behavior == 3) return "состояние не меняем"
+    return "отключаем термостат и реле"
+}
+
 // Нормализует failureTimeout: минимум 15 мин, кратность 15
 function getFailureTimeoutMinutes(options) {
     let minutes = options.failureTimeout != null ? options.failureTimeout : 240
@@ -417,33 +633,67 @@ function getFailureTimeoutMinutes(options) {
     return minutes
 }
 
-// Применяет поведение при отказе датчика к реле в зависимости от целевого режима термостата
+// Применяет поведение при отказе датчика.
+// 0 — Отключить: TargetHCState=0, оба реле OFF.
+// 1 — Нагрев: оставить TargetHCState как есть, реле нагрева ON, реле охлаждения OFF.
+// 2 — Охлаждение: оставить TargetHCState как есть, реле нагрева OFF, реле охлаждения ON.
+// 3 — Ничего не делать: ни реле, ни режим не трогаем.
 function applyFailureBehavior(service, options, source) {
-    const heatingRelay = getDevice(options, "heatingRelay")
-    const coolingRelay = getDevice(options, "coolingRelay")
-    // Если у термостата нет TargetHeatingCoolingState — targetState останется undefined,
-    // тогда в режиме "Включать" по умолчанию включаем нагрев (защита от замерзания).
-    const targetChar = service ? service.getCharacteristic(HC.TargetHeatingCoolingState) : null
-    const targetState = targetChar ? targetChar.getValue() : undefined
-
-    if (options.failureBehavior == 1) {
-        // Включать: включаем реле, соответствующее целевому режиму
-        if (targetState == 1 || targetState == 3 || targetState === undefined) {
-            setRelayValue(heatingRelay, true, source)
-            setRelayValue(coolingRelay, false, source)
-        } else if (targetState == 2) {
-            setRelayValue(heatingRelay, false, source)
-            setRelayValue(coolingRelay, true, source)
-        } else {
-            // Термостат выключен — нечего включать
-            setRelayValue(heatingRelay, false, source)
-            setRelayValue(coolingRelay, false, source)
-        }
+    const behavior = options.failureBehavior
+    if (behavior == 3) {
+        logDebug("Отказ датчика: режим 'Ничего не делать' — состояние не меняем", source, options.debug)
         return
     }
-    // Отключать: оба реле выкл
-    setRelayValue(heatingRelay, false, source)
-    setRelayValue(coolingRelay, false, source)
+
+    const heatingRelay = getDevice(options, "heatingRelay")
+    const coolingRelay = getDevice(options, "coolingRelay")
+
+    if (behavior == 1) {
+        logDebug("Отказ датчика: режим 'Нагрев' — реле нагрева ON, охлаждения OFF (целевой режим не меняем)", source, options.debug)
+        setRelayValue(heatingRelay, true, source, options.debug)
+        setRelayValue(coolingRelay, false, source, options.debug)
+        return
+    }
+
+    if (behavior == 2) {
+        logDebug("Отказ датчика: режим 'Охлаждение' — реле охлаждения ON, нагрева OFF (целевой режим не меняем)", source, options.debug)
+        setRelayValue(heatingRelay, false, source, options.debug)
+        setRelayValue(coolingRelay, true, source, options.debug)
+        return
+    }
+
+    // 0 — Отключить: целевой режим в OFF + оба реле OFF
+    logDebug("Отказ датчика: режим 'Отключить' — TargetHCState=0, оба реле OFF", source, options.debug)
+    const targetChar = service ? service.getCharacteristic(HC.TargetHeatingCoolingState) : null
+    if (targetChar && targetChar.getValue() !== 0) {
+        targetChar.setValue(0)
+    }
+    setRelayValue(heatingRelay, false, source, options.debug)
+    setRelayValue(coolingRelay, false, source, options.debug)
+}
+
+// Восстановление после отказа датчика.
+// Сбрасывает флаг sensorFailed и в режиме «Отключить» возвращает Целевой режим, который пользователь
+// выбрал последним (до или во время отказа).
+function recoverFromSensorFailure(service, variables, options, source) {
+    if (!variables.sensorFailed) return
+    variables.sensorFailed = false
+    logWarn("Датчик температуры восстановлен. Управление реле возвращено в обычный режим.", source)
+
+    // В режиме «Отключить» сценарий ранее сбросил TargetHCState в 0 — восстанавливаем сохранённый.
+    if (options.failureBehavior == 0 && variables.lastUserTargetState != null) {
+        const targetChar = service ? service.getCharacteristic(HC.TargetHeatingCoolingState) : null
+        if (targetChar && targetChar.getValue() !== variables.lastUserTargetState) {
+            logWarn(`Восстанавливаем Целевой режим: ${variables.lastUserTargetState}`, source)
+            targetChar.setValue(variables.lastUserTargetState)
+        }
+    }
+
+    // Прогоним обычную логику управления реле (sensorFailed уже false).
+    const currentTempChar = service ? service.getCharacteristic(HC.CurrentTemperature) : null
+    if (currentTempChar) {
+        handleHeatingCoolingLogic(currentTempChar, options, variables)
+    }
 }
 
 // Проверка состояния датчика. Срабатывает по cron каждые 15 минут.
@@ -456,24 +706,23 @@ function checkSensorFailure(service, variables, options) {
         if (!variables.lastUpdateTime) {
             // Если ни одного обновления не было — отсчитываем от запуска
             variables.lastUpdateTime = Date.now()
+            logDebug("Проверка датчика: lastUpdateTime неизвестно, инициализируем", sensorChar, options.debug)
             return
         }
         const elapsed = Date.now() - variables.lastUpdateTime
+        const elapsedMin = Math.round(elapsed / 60000)
+        const timeoutMin = Math.round(timeoutMs / 60000)
+        logDebug(`Проверка датчика: с последнего обновления ${elapsedMin} мин (timeout ${timeoutMin} мин)`, sensorChar, options.debug)
         if (elapsed <= timeoutMs) {
-            if (variables.sensorFailed) {
-                variables.sensorFailed = false
-                logWarn(`Датчик температуры восстановлен. Управление реле возвращено в обычный режим`, sensorChar)
-                handleHeatingCoolingLogic(sensorChar, options, variables)
-            }
+            recoverFromSensorFailure(service, variables, options, sensorChar)
             return
         }
-        const minutes = Math.round(elapsed / 60000)
         if (!variables.sensorFailed) {
             variables.sensorFailed = true
             const sensorService = getDevice(options, "sensor")
             const sensorName = sensorService ? getDeviceName(sensorService) : options.sensor
-            const behaviorText = options.failureBehavior == 1 ? "включаем реле по целевому режиму" : "отключаем реле"
-            logError(`Нет показаний от датчика температуры (${sensorName}) уже ${minutes} мин. Отказ датчика: ${behaviorText}`, sensorChar)
+            const behaviorText = describeFailureBehavior(options.failureBehavior)
+            logError(`Нет показаний от датчика температуры (${sensorName}) уже ${elapsedMin} мин. Отказ датчика: ${behaviorText}`, sensorChar)
         }
         applyFailureBehavior(service, options, sensorChar)
     } catch (e) {
@@ -484,6 +733,7 @@ function checkSensorFailure(service, variables, options) {
 // Запускает периодическую проверку отказа датчика (раз в 15 минут).
 function startFailureCheckCron(service, variables, options) {
     if (variables.failureCheckTask) return
+    logDebug(`Создаём cron 'каждые 15 мин' для проверки отказа датчика (timeout ${getFailureTimeoutMinutes(options)} мин)`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
     variables.failureCheckTask = Cron.schedule("0 */15 * * * *", function () {
         checkSensorFailure(service, variables, options)
     })
@@ -517,14 +767,17 @@ function getDevice(options, name) {
     }
 }
 
-function logInfo(text, source, show) {
-    if (show) console.info(getLogText(text, source));
-}
 function logWarn(text, source) {
     console.warn(getLogText(text, source));
 }
 function logError(text, source) {
     console.error(getLogText(text, source));
+}
+// Отладочный лог. Пишет только если options.debug=true (передаётся третьим аргументом).
+// Используем console.info (а не console.log) — в Sprut.Hub это уровень "Информация".
+function logDebug(text, source, debug) {
+    if (!debug) return
+    console.info(getLogText(text, source));
 }
 function getLogText(text, source) {
     if (source) {
@@ -582,11 +835,8 @@ function isSelfChangeByContext(context) {
     // Проверяем, что изменение произошло сценарием (self change)
     // Шаблон: 'LOGIC <- C <- LOGIC'
     const elements = context.toString().split(' <- ')
-    if (elements.length >= 3 &&
+    return elements.length >= 3 &&
         elements[0].startsWith('LOGIC') &&
         elements[1].startsWith('C') &&
-        elements[2] === elements[0]) {
-        return true
-    }
-    return false
+        elements[2] === elements[0];
 }
