@@ -217,7 +217,8 @@ function setupPeriodicTempChange(source, variables, options, targetTemperature, 
                         return;
                     }
                     if (currentTime - variables.lastUpdateTime < stalenessThresholdMs) {
-                        logInfo(`Периодическое изменение температуры пропущено: последнее обновление было менее ${stalenessThresholdMs / 60000} минут назад`, source, debug);
+                        const thresholdMinutes = stalenessThresholdMs / 60000;
+                        logInfo("Периодическое изменение температуры пропущено: последнее обновление было менее " + thresholdMinutes + " минут назад", source, debug);
                         return;
                     }
                 }
