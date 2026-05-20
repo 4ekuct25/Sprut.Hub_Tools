@@ -1,0 +1,62 @@
+{
+  "name": "Внешний датчик температуры — спальня",
+  "description": "Термоголовка Aqara E1 в спальне с привязанным внешним датчиком температуры. Логика сценария висит на сервисе Thermostat термоголовки.",
+  "options": {
+    "sensor": "200.200.2",
+    "changeTempPeriodically": 0
+  },
+  "variables": {},
+  "rooms": [{ "name": "Спальня" }],
+  "accessories": [
+    {
+      "id": 100,
+      "name": "Термоголовка",
+      "room": "Спальня",
+      "target": true,
+      "modelId": "lumi.airrtc.agl001",
+      "manufacturer": "Aqara",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "Thermostat",
+          "name": "Термоголовка",
+          "characteristics": [
+            { "type": "CurrentHeatingCoolingState", "value": 1 },
+            { "type": "TargetHeatingCoolingState", "value": 1 },
+            { "type": "CurrentTemperature", "value": 21 },
+            { "type": "TargetTemperature", "value": 22 }
+          ]
+        },
+        {
+          "type": "Switch",
+          "name": "Внешний датчик температуры",
+          "characteristics": [{ "type": "On", "value": false }]
+        },
+        {
+          "type": "C_TemperatureControl",
+          "name": "Температура внешнего датчика",
+          "characteristics": [{ "type": "TargetTemperature", "value": 21 }]
+        }
+      ]
+    },
+    {
+      "id": 200,
+      "name": "Датчик температуры",
+      "room": "Спальня",
+      "services": [
+        {
+          "type": "AccessoryInformation",
+          "characteristics": [{ "type": "C_Online", "value": true }]
+        },
+        {
+          "type": "TemperatureSensor",
+          "name": "Датчик температуры",
+          "characteristics": [{ "type": "CurrentTemperature", "value": 21.5 }]
+        }
+      ]
+    }
+  ]
+}

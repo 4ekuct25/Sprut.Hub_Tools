@@ -2,9 +2,17 @@
 const DEBUG_TITLE = "ВДТ: "; // Константа для отладки
 const HEATING_STATE = 1; // Состояние нагрева
 const ONE_DAY_MS = 24 * 60 * 60 * 1000; // Сутки в миллисекундах
-const HALF_HOUR_MS = 30 * 60 * 1000; // 30 минут в миллисекундах
 const TEMP_CHANGE_STEP = 0.1; // Шаг изменения температуры в градусах
 const TEMP_CHANGE_DELAY_MS = 10000; // Задержка перед восстановлением температуры (10 секунд)
+
+// Пороги «свежести» обновления от датчика: при последнем обновлении в этих пределах
+// периодическое изменение пропускается, чтобы не мешать активному сенсору.
+// Подобраны исходя из таймаутов переключения термоголовки на внутренний датчик:
+// Danfoss eTRV0101 — 35 минут, SONOFF TRVZB — 2 часа.
+// Threshold = hardware_timeout − cron_interval — гарантирует, что следующий cron-тик
+// успеет встряхнуть температуру до таймаута, даже если только что был пропуск.
+const STALENESS_THRESHOLD_30MIN_MS = 5 * 60 * 1000;   // 30-минутный режим (Danfoss): 35 − 30 = 5 мин
+const STALENESS_THRESHOLD_1HOUR_MS = 60 * 60 * 1000;  // 60-минутный режим (Sonoff): 120 − 60 = 60 мин
 
 // Поддерживаемые термостаты
 const SUPPORTED_THERMOSTATS = {
@@ -33,7 +41,7 @@ let scenarioDescription = {
 info = {
     name: scenarioName.ru,
     description: scenarioDescription.ru,
-    version: "2.3",
+    version: "2.4",
     author: "@BOOMikru",
     onStart: true,
 
@@ -64,15 +72,21 @@ info = {
         },
         changeTempPeriodically: {
             name: {
-                en: "Change temperature value every hour",
-                ru: "Менять значения температуры каждый час"
+                en: "Periodically change temperature value",
+                ru: "Периодически менять значение температуры"
             },
             desc: {
-                en: "For thermostats not to switch to internal sensor. Changes temperature only if last update was more than 30 minutes ago. (Recommended for Sonoff)",
-                ru: "Для того, что бы термоголовка не переключалась на внутренний датчик. Меняет температуру только если последнее обновление было более полу часа назад. (Рекомендуется для Sonoff)"
+                en: "For thermostats not to switch to internal sensor. Changes temperature only if last update was more than 30 minutes ago.",
+                ru: "Для того, что бы термоголовка не переключалась на внутренний датчик. Меняет температуру только если последнее обновление было более получаса назад."
             },
-            type: "Boolean",
-            value: false
+            type: "Integer",
+            value: 0,
+            formType: "list",
+            values: [
+                { value: 0, key: "OFF", name: { ru: "Выключено", en: "Off" } },
+                { value: 30, key: "MIN_30", name: { ru: "30 минут (рекомендовано для Danfoss)", en: "30 minutes (recommended for Danfoss)" } },
+                { value: 60, key: "HOUR_1", name: { ru: "1 час (рекомендовано для Sonoff)", en: "1 hour (recommended for Sonoff)" } }
+            ]
         }
     },
 
@@ -185,20 +199,25 @@ function setupSensorSubscription(source, variables, options, targetTemperature, 
     }
 }
 
-// Настраивает периодическое изменение температуры каждый час для предотвращения переключения термоголовки на внутренний датчик
+// Настраивает периодическое изменение температуры (30 минут / 1 час) для предотвращения переключения термоголовки на внутренний датчик
 function setupPeriodicTempChange(source, variables, options, targetTemperature, currentHeatingCoolingState) {
-    if (options.changeTempPeriodically) {
+    if (options.changeTempPeriodically > 0) {
         if (!variables.tempChangeTask) {
-            variables.tempChangeTask = Cron.schedule("0 0 * * * *", function () {
-                // Проверяем, что последнее обновление было более часа назад
+            const cronExpression = options.changeTempPeriodically === 30 ? "0 */30 * * * *" : "0 0 * * * *";
+            const stalenessThresholdMs = options.changeTempPeriodically === 30
+                ? STALENESS_THRESHOLD_30MIN_MS
+                : STALENESS_THRESHOLD_1HOUR_MS;
+            variables.tempChangeTask = Cron.schedule(cronExpression, function () {
+                // Пропускаем встряску, если датчик недавно обновлялся — он сам поддерживает термоголовку «живой».
+                // Порог зависит от выбранного режима (см. STALENESS_THRESHOLD_*).
                 const currentTime = Date.now();
                 if (variables.lastUpdateTime) {
                     if (currentTime - variables.lastUpdateTime > ONE_DAY_MS) {
                         logWarn("Периодическое изменение температуры пропущено: нет обновлений от датчика более суток", source);
                         return;
                     }
-                    if (currentTime - variables.lastUpdateTime <= HALF_HOUR_MS) {
-                        logInfo("Периодическое изменение температуры пропущено: последнее обновление было менее 30 минут назад", source, debug);
+                    if (currentTime - variables.lastUpdateTime < stalenessThresholdMs) {
+                        logInfo(`Периодическое изменение температуры пропущено: последнее обновление было менее ${stalenessThresholdMs / 60000} минут назад`, source, debug);
                         return;
                     }
                 }
@@ -227,7 +246,7 @@ function setupPeriodicTempChange(source, variables, options, targetTemperature, 
                 }
                 variables.tempChangeTimeoutId = setTimeout(function () {
                     // Проверяем, что опция все еще включена
-                    if (options.changeTempPeriodically && targetTemperature) {
+                    if (options.changeTempPeriodically > 0 && targetTemperature) {
                         setValueFromSensor(source, variables, options, targetTemperature, false);
                     }
                     variables.tempChangeTimeoutId = undefined;
