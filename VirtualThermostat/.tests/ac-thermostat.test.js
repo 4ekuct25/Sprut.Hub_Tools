@@ -127,6 +127,7 @@ function freshVars() {
     acLastCommandTime: undefined,
     acReassertCount: 0,
     acLastSetPower: undefined,
+    acTempUpdateTime: undefined,
     acPowerSubscribe: undefined,
     acPowerSubscribed: false,
     midnightTask: undefined,
@@ -142,8 +143,10 @@ function acUUID(ac) {
 
 // Делает вид, что окно подавления запоздалых событий (AC_ECHO_WINDOW_MS) истекло —
 // последующие события кондиционера трактуются как настоящее ручное вмешательство.
+// ВАЖНО: часы внутри сценария — фейковые (TimeController), реальный Date.now()
+// теста с ними не совпадает, поэтому просто обнуляем время команды.
 function expireEchoWindow(vars) {
-  if (vars.acLastCommandTime != null) vars.acLastCommandTime = Date.now() - 31000;
+  vars.acLastCommandTime = undefined;
 }
 
 function runTrigger(scenario, t, options, vars, value) {
@@ -882,6 +885,174 @@ describe('Вентилятор §"Системное переигрывание 
     });
 
     expect(vars.fanSpeedManuallySet).toBe(true);
+  });
+});
+
+describe('AC §"Плавная целевая температура (acSmoothTarget)"', () => {
+  it('охлаждение: целевая = собственная температура кондиционера минус отставание комнаты от цели', ({ hub, scenario }) => {
+    // Комната 27, цель 24 (отставание 3), собственный датчик кондиционера 28 → 28-3=25
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 2);
+
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+  });
+
+  it('нагрев: целевая = собственная температура кондиционера плюс отставание', ({ hub, scenario }) => {
+    // Комната 20, цель 24 (отставание 4), собственный датчик 22 → 22+4=26
+    const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 20, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 22 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 1);
+
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(1);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(26);
+  });
+
+  it('значение округляется до целого (шаг кондиционера 1°)', ({ hub, scenario }) => {
+    // 27.6 - (27.3-24) = 24.3 → 24
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27.3, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 20, currentTemp: 27.6 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 2);
+
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
+  it('антиспам: мелкая подстройка в течение 2 минут откладывается, скачок ≥2° проходит', ({ hub, scenario, time }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+
+    // Комната чуть остыла: 27→26.4 → расчёт 28-(26.4-24)=25.6→26 — разница 1° и интервал не прошёл → ждём
+    t.char(HS.Thermostat, HC.CurrentTemperature).setValue(26.4);
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+
+    // Прошло больше 2 минут (фейковые часы сценария) → подстройка применяется
+    time.tick(121000);
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(26);
+  });
+
+  it('эхо плавной целевой температуры не считается ручным вмешательством', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 2);
+    // Устройство подтверждает 25 (вне окна — допуск want-match 1.5°)
+    expireEchoWindow(vars);
+    ac.char(HS.Thermostat, HC.TargetTemperature).setValue(25);
+
+    expect(vars.acManualOverride).toBe(false);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+  });
+
+  it('нет данных для расчёта → откат к фиксированной целевой температуре', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    // Кондиционер без собственного датчика температуры — соберём вручную
+    const ac = hub.addAccessory({
+      id: 20, name: 'Кондиционер', room: 'Гостиная',
+      services: [
+        { type: HS.AccessoryInformation, characteristics: [{ type: HC.C_Online, value: true }] },
+        { type: HS.Thermostat, characteristics: [
+          { type: HC.TargetHeatingCoolingState, value: 0 },
+          { type: HC.TargetTemperature, value: 24 },
+        ] },
+      ],
+    });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 2);
+
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(17);
+  });
+});
+
+describe('AC §"Вентилятор без компрессора (acFanOnlyAtTarget)"', () => {
+  it('цель достигнута → кондиционер НЕ выключается: режим остаётся, целевая = собственная +2', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    // Питание осталось включённым
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    // Целевая температура выше собственного датчика → компрессор стоит, вентилятор крутит
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
+  });
+
+  it('опция выключена → кондиционер выключается полностью (как раньше)', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: false });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
+  it('выключение самого термостата → кондиционер выключается полностью даже с включённой опцией', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true });
+
+    runTrigger(scenario, t, options, vars, 0);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
+  it('простой с вентилятором: события питания и режима — эхо, термостат не трогается', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expireEchoWindow(vars);
+    // Устройство переизлучает состояние «включено, режим 2» — желаемое совпадает
+    ac.char(HS.Fan, HC.On).setValue(true);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+
+    expect(vars.acManualOverride).toBe(false);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+  });
+
+  it('комната снова прогрелась → из простоя обратно в охлаждение с рабочей целевой температурой', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, emulateThermostat: true });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
+
+    // Прогрелось до 24.6 → эмуляция включит охлаждение
+    t.char(HS.Thermostat, HC.CurrentTemperature).setValue(24.6);
+    scenario.run({
+      source: t.char(HS.Thermostat, HC.CurrentTemperature),
+      value: 24.6, variables: vars, options,
+      context: 'LOGIC[1] <- C[10.12.0] <- CLOUD[0]',
+    });
+
+    expect(t.char(HS.Thermostat, HC.CurrentHeatingCoolingState).getValue()).toBe(2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(17);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
   });
 });
 
