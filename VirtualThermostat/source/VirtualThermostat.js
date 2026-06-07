@@ -1,6 +1,7 @@
 let servicesList = getServicesByServiceAndCharacteristicType([HS.Switch, HS.Outlet], [HC.On]);
 let sensorsServicesList = getServicesByServiceAndCharacteristicType([HS.TemperatureSensor, HS.Thermostat], [HC.CurrentTemperature]);
 let acServicesList = getServicesByServiceAndCharacteristicType([HS.Thermostat], [HC.TargetHeatingCoolingState]);
+let acPowerServicesList = getServicesByCharacteristicTypes([HC.On, HC.Active]);
 
 // Выносим описание в переменную для использования в info и options
 let scenarioDescription = {
@@ -11,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.3.0-ac",
+    version: "3.4.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -93,6 +94,20 @@ info = {
             value: "",
             formType: "list",
             values: acServicesList
+        },
+        acPowerSwitch: {
+            name: {
+                en: "AC power switch (service with On)",
+                ru: "Выключатель кондиционера (сервис с Вкл/Выкл)"
+            },
+            desc: {
+                ru: "Опционально. Некоторые кондиционеры (например, VIOMI) не выключаются записью режима «Выключено» в сервис Термостат — у них питанием управляет отдельный сервис с характеристикой «Включен» (например, сервис «Кондиционер»). Если выбрать его здесь, сценарий будет выключать кондиционер через этот выключатель, а при включении — сначала включать питание, затем ставить режим и температуру. Ручное включение/выключение этим выключателем синхронизируется с виртуальным термостатом.",
+                en: "Optional. Some ACs (e.g. VIOMI) cannot be turned off by writing Off to the Thermostat service — power is controlled by a separate service with the On characteristic. If selected, the scenario turns the AC off via this switch, and on power-up sets power first, then mode and temperature. Manual switching is synchronized with the virtual thermostat."
+            },
+            type: "String",
+            value: "",
+            formType: "list",
+            values: acPowerServicesList
         },
         acCoolTemp: {
             name: {
@@ -297,6 +312,10 @@ info = {
         // (защита от запоздалых подтверждений устройства).
         acLastCommandTime: undefined,
         acReassertCount: 0,
+        // Последнее состояние питания, установленное сценарием (через acPowerSwitch)
+        acLastSetPower: undefined,
+        acPowerSubscribe: undefined,
+        acPowerSubscribed: false,
         midnightTask: undefined,
         failureCheckTask: undefined,
         sensorFailed: false,
@@ -448,9 +467,47 @@ function getAcHeatTemp(options) {
     return options.acHeatTemp != null ? options.acHeatTemp : 30
 }
 
+// Надёжное приведение значения характеристики On/Active к boolean.
+function toBool(value) {
+    if (value == null) return null
+    if (value == true || value == 1) return true
+    const s = String(value).toLowerCase()
+    return s == 'true' || s == '1'
+}
+
+// Характеристика питания у сервиса-выключателя: On (Boolean) или Active (0/1).
+function getPowerChar(service) {
+    if (!service) return null
+    return service.getCharacteristic(HC.On) || service.getCharacteristic(HC.Active)
+}
+
+function readPower(service) {
+    const c = getPowerChar(service)
+    return c ? toBool(c.getValue()) : null
+}
+
+// Пишет питание кондиционера. Запоминает намерение ДО записи (для эхо-фильтра).
+function writePower(service, on, source, options, variables) {
+    const c = getPowerChar(service)
+    if (!c) {
+        logError(`У выключателя ${getDeviceName(service)} нет характеристики Включен/Активно`, source)
+        return
+    }
+    if (variables) variables.acLastSetPower = on
+    const prev = toBool(c.getValue())
+    if (prev !== on) {
+        if (variables) variables.acLastCommandTime = Date.now()
+        c.setValue(c.getType() === HC.Active ? (on ? 1 : 0) : on)
+        logDebug(`Выключатель кондиционера ${getDeviceName(service)}: ${prev} → ${on}`, source, options.debug)
+    }
+}
+
 // Устанавливает кондиционеру целевой режим (0 — выкл, 1 — нагрев, 2 — охлаждение)
 // и целевую температуру (при state != 0). Значения пишутся только при отличии,
 // чтобы не спамить команды на устройство.
+// Если задан «Выключатель кондиционера» (acPowerSwitch), выключение выполняется
+// через него (некоторые устройства не принимают режим «Выключено» в сервис
+// Термостат), а при включении сначала подаётся питание.
 // При ручном вмешательстве (acManualOverride) кондиционер не трогаем.
 function setAcMode(ac, state, temp, source, options, variables) {
     if (!ac) return
@@ -458,7 +515,24 @@ function setAcMode(ac, state, temp, source, options, variables) {
         logDebug(`Кондиционер под ручным управлением (acManualOverride) — команды не отправляем`, source, options.debug)
         return
     }
+    const power = getDevice(options, "acPowerSwitch")
+
+    // Выключение через выключатель питания: режим в термостат-сервис не пишем
+    if (state == 0 && power) {
+        try {
+            if (variables) variables.acLastSetState = 0
+            writePower(power, false, source, options, variables)
+        } catch (e) {
+            logError(`Ошибка при выключении кондиционера через выключатель ${getDeviceName(power)}: ${e.toString()}`, source)
+        }
+        return
+    }
+
     try {
+        // Включение: сначала питание (если есть выключатель и он выключен)
+        if (state != 0 && power && readPower(power) == false) {
+            writePower(power, true, source, options, variables)
+        }
         const acAccessory = ac.getAccessory()
         const onlineChar = acAccessory.getService(HS.AccessoryInformation).getCharacteristic(HC.C_Online)
         if (onlineChar && onlineChar.getValue() != true) {
@@ -734,7 +808,13 @@ function subscribeToAcState(service, variables, options) {
             const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
             const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
 
+            const hasPowerSwitch = options.acPowerSwitch != null && options.acPowerSwitch !== ''
+
             if (type === HC.TargetHeatingCoolingState) {
+                // При выключателе питания выключенность определяется питанием, а не
+                // режимом термостат-сервиса: устройства вроде VIOMI продолжают
+                // сообщать режим 2 даже выключенными — это не ручное включение.
+                if (hasPowerSwitch && desired == 0) return
                 // Событие совпадает с тем, чего сценарий сам добивается — эхо/подтверждение
                 if (desired != null && (acValue == desired || numValue == desired)) {
                     if (!inEchoWindow) variables.acReassertCount = 0
@@ -793,14 +873,11 @@ function subscribeToAcState(service, variables, options) {
             // по питанию). Дальше термостат берёт управление: применит свою логику
             // по внешнему датчику и форсированную уставку.
             if (virtualTarget == 0) {
-                if (type === HC.TargetHeatingCoolingState && numValue != null && (numValue == 1 || numValue == 2 || numValue == 3)) {
-                    variables.acManualOverride = false
-                    variables.acReassertCount = 0
-                    logWarn("Кондиционер включён вручную (режим " + numValue + ") — включаю виртуальный термостат", thermostatSource)
-                    targetChar.setValue(numValue)
-                    if (toNum(targetChar.getValue()) != numValue) {
-                        logWarn("Не удалось включить виртуальный термостат в режим " + numValue + " — похоже, этот режим выключен в настройках виртуального устройства", thermostatSource)
-                    }
+                // Включение термостата по ручному включению кондиционера — только ВНЕ окна
+                // подавления: внутри окна «включённость» может быть запоздалым состоянием
+                // устройства, которое не успело применить нашу команду выключения.
+                if (!inEchoWindow && type === HC.TargetHeatingCoolingState && numValue != null && (numValue == 1 || numValue == 2 || numValue == 3)) {
+                    turnOnVirtualThermostat(service, numValue, variables, thermostatSource)
                 }
                 // Остальные изменения (уставка, вентиляция/осушение) при выключенном
                 // термостате — пользователь свободно управляет кондиционером
@@ -820,6 +897,101 @@ function subscribeToAcState(service, variables, options) {
     })
     variables.acSubscribe = subscribe
     variables.acSubscribed = true
+
+    subscribeToAcPower(service, variables, options)
+}
+
+// Включает виртуальный термостат в указанный режим (синхронизация с ручным
+// включением кондиционера). Снимает ручной режим.
+function turnOnVirtualThermostat(service, mode, variables, source) {
+    const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    if (!targetChar) return
+    variables.acManualOverride = false
+    variables.acReassertCount = 0
+    logWarn("Кондиционер включён вручную (режим " + mode + ") — включаю виртуальный термостат", source)
+    targetChar.setValue(mode)
+    if (toNum(targetChar.getValue()) != mode) {
+        logWarn("Не удалось включить виртуальный термостат в режим " + mode + " — похоже, этот режим выключен в настройках виртуального устройства", source)
+    }
+}
+
+// Подписка на выключатель питания кондиционера (опция acPowerSwitch).
+// Ручное выключение питания при активном термостате → термостат выключается.
+// Ручное включение питания при выключенном термостате → термостат включается
+// (в последний выбранный пользователем режим, по умолчанию — Охлаждение).
+function subscribeToAcPower(service, variables, options) {
+    const power = getDevice(options, "acPowerSwitch")
+    if (!power) return
+    if (variables.acPowerSubscribe && variables.acPowerSubscribed == true) return
+
+    const thermostatSource = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    logDebug(`Создаём подписку на выключатель кондиционера (UUID ${options.acPowerSwitch})`, thermostatSource, options.debug)
+
+    let subscribe = Hub.subscribeWithCondition("", "", [power.getType()], [HC.On, HC.Active], function (powerSource, powerValue) {
+        try {
+            const powerService = powerSource.getService()
+            if (powerService.getUUID() != options.acPowerSwitch) return
+
+            const isOn = toBool(powerValue)
+            const desired = computeDesiredAcState(service)
+            const desiredPower = desired != null ? desired != 0 : null
+
+            const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
+            const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
+
+            logDebug(`AC-питание: ${powerValue} (isOn ${isOn}), lastSetPower=${variables.acLastSetPower}, desiredPower=${desiredPower}, inWindow=${inEchoWindow}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
+
+            // Совпадает с желаемым — эхо/подтверждение
+            if (desiredPower != null && isOn === desiredPower) {
+                if (!inEchoWindow) variables.acReassertCount = 0
+                return
+            }
+            // Эхо собственной команды внутри окна
+            if (inEchoWindow && variables.acLastSetPower != null && isOn === variables.acLastSetPower) return
+
+            // Запоздалое расхождение внутри окна — мягко переотправляем питание
+            if (inEchoWindow) {
+                if (desiredPower != null) {
+                    const count = (variables.acReassertCount || 0) + 1
+                    if (count <= AC_REASSERT_MAX) {
+                        variables.acReassertCount = count
+                        logWarn("Кондиционер сообщил питание " + isOn + ", ожидается " + desiredPower + " — повторяю команду (" + count + " из " + AC_REASSERT_MAX + ")", thermostatSource)
+                        writePower(power, desiredPower, thermostatSource, options, variables)
+                        return
+                    }
+                } else {
+                    return
+                }
+            }
+
+            const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+            const virtualTarget = targetChar ? toNum(targetChar.getValue()) : 0
+
+            // Термостат выключен, питание включили вручную → включаем термостат
+            if (virtualTarget == 0) {
+                if (isOn === true && !inEchoWindow) {
+                    // Последний пользовательский режим, по умолчанию Охлаждение
+                    let mode = toNum(variables.lastUserTargetState)
+                    if (mode != 1 && mode != 2 && mode != 3) mode = 2
+                    turnOnVirtualThermostat(service, mode, variables, thermostatSource)
+                }
+                return
+            }
+
+            if (variables.acManualOverride) return
+
+            // Термостат активен, питание выключили вручную → выключаем термостат
+            if (isOn === false) {
+                variables.acManualOverride = true
+                logWarn("Кондиционер выключен вручную (выключатель) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат или кондиционер снова.", thermostatSource)
+                targetChar.setValue(0)
+            }
+        } catch (e) {
+            logError("Ошибка обработки выключателя кондиционера: " + e.toString())
+        }
+    })
+    variables.acPowerSubscribe = subscribe
+    variables.acPowerSubscribed = true
 }
 
 function setRelayValue(relay, value, source, debug) {
@@ -1235,6 +1407,28 @@ function getServicesByServiceAndCharacteristicType(serviceTypes, characteristicT
 const AC_ECHO_WINDOW_MS = 30000
 // Максимум мягких переотправок команды внутри окна, после — ручной режим.
 const AC_REASSERT_MAX = 3
+// Список ВСЕХ сервисов (любого типа), имеющих хотя бы одну из указанных
+// характеристик. Используется для выбора выключателя кондиционера: тип сервиса
+// питания у разных интеграций свой (Fan, Switch, кастомные).
+function getServicesByCharacteristicTypes(characteristicTypes) {
+    let unsortedServicesList = [];
+    Hub.getAccessories().forEach((a) => {
+        a.getServices()
+            .filter((s) => s.getType() != HS.AccessoryInformation)
+            .filter((s) => characteristicTypes.some((c) => s.getCharacteristic(c)))
+            .forEach((s) => {
+                let name = getDeviceName(s);
+                unsortedServicesList.push({
+                    name: { ru: name, en: name },
+                    value: s.getUUID()
+                });
+            });
+    });
+    let sortedServicesList = [{ name: { ru: "Не выбрано", en: "Not selected" }, value: '' }];
+    unsortedServicesList.sort((a, b) => a.name.ru.localeCompare(b.name.ru)).forEach((s) => sortedServicesList.push(s));
+    return sortedServicesList;
+}
+
 // Минимальный шаг времени до отказа датчика (минуты). См. опцию failureTimeout.
 const FAILURE_TIMEOUT_STEP_MIN = 15
 // Константа для отладки

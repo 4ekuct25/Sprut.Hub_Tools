@@ -40,25 +40,35 @@ function makeThermostat(hub, id, currentState, targetState, opts) {
 // как у VIOMI Cross 18000BTU.
 function makeAc(hub, id, opts) {
   opts = opts || {};
-  return hub.addAccessory({
-    id, name: 'Кондиционер', room: 'Гостиная',
-    services: [
-      {
-        type: HS.AccessoryInformation,
-        characteristics: [{ type: HC.C_Online, value: opts.online !== false }],
-      },
-      {
-        type: HS.Thermostat,
-        characteristics: [
-          { type: HC.CurrentHeatingCoolingState, value: opts.currentState != null ? opts.currentState : 0 },
-          { type: HC.TargetHeatingCoolingState, value: opts.targetState != null ? opts.targetState : 0 },
-          { type: HC.CurrentTemperature, value: opts.currentTemp != null ? opts.currentTemp : 28 },
-          { type: HC.TargetTemperature, value: opts.targetTemp != null ? opts.targetTemp : 24 },
-          { type: HC.C_FanSpeed, value: opts.fanSpeed != null ? opts.fanSpeed : 0 },
-        ],
-      },
-    ],
-  });
+  const services = [
+    {
+      type: HS.AccessoryInformation,
+      characteristics: [{ type: HC.C_Online, value: opts.online !== false }],
+    },
+    {
+      type: HS.Thermostat,
+      characteristics: [
+        { type: HC.CurrentHeatingCoolingState, value: opts.currentState != null ? opts.currentState : 0 },
+        { type: HC.TargetHeatingCoolingState, value: opts.targetState != null ? opts.targetState : 0 },
+        { type: HC.CurrentTemperature, value: opts.currentTemp != null ? opts.currentTemp : 28 },
+        { type: HC.TargetTemperature, value: opts.targetTemp != null ? opts.targetTemp : 24 },
+        { type: HC.C_FanSpeed, value: opts.fanSpeed != null ? opts.fanSpeed : 0 },
+      ],
+    },
+  ];
+  if (opts.withPower) {
+    // Отдельный сервис-выключатель питания, как у VIOMI ("Кондиционер" с "Включен")
+    services.push({
+      type: HS.Fan,
+      name: 'Кондиционер',
+      characteristics: [{ type: HC.On, value: opts.power === true }],
+    });
+  }
+  return hub.addAccessory({ id, name: 'Кондиционер', room: 'Гостиная', services });
+}
+
+function acPowerUUID(ac) {
+  return ac.getService(HS.Fan).getUUID();
 }
 
 function makeTempSensor(hub, id, temp, online) {
@@ -116,6 +126,9 @@ function freshVars() {
     acSubscribed: false,
     acLastCommandTime: undefined,
     acReassertCount: 0,
+    acLastSetPower: undefined,
+    acPowerSubscribe: undefined,
+    acPowerSubscribed: false,
     midnightTask: undefined,
     failureCheckTask: undefined,
     sensorFailed: false,
@@ -640,6 +653,132 @@ describe('AC §"Окно подавления запоздалых событи�
     expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
     // Кондиционер остаётся как есть — сценарий больше не воюет
     expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+  });
+});
+
+describe('AC §"Выключатель питания (acPowerSwitch)"', () => {
+  it('требование снято → выключается ПИТАНИЕ, режим термостат-сервиса не трогаем', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.5, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+    // Режим термостат-сервиса остался 2 — мы его не трогаем (VIOMI его не принимает)
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(vars.acLastSetPower).toBe(false);
+  });
+
+  it('требуется охлаждение при выключенном питании → питание ON, режим 2, уставка', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, withPower: true, power: false });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(17);
+  });
+
+  it('упорный режим 2 от устройства при снятом требовании → игнорируется, термостат не включается', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.5, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+
+    // Устройство продолжает сообщать режим 2 (как VIOMI) — и в окне, и вне окна
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    expireEchoWindow(vars);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(1);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2); // target юзера не сброшен
+    expect(vars.acManualOverride).toBe(false);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
+  it('питание выключили вручную при активном термостате → термостат выключается', ({ hub, scenario, logs }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: false });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+
+    expireEchoWindow(vars);
+    ac.char(HS.Fan, HC.On).setValue(false);
+
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    // Кондиционер не включаем обратно
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+    const warns = logs.byLevel('warn');
+    expect(warns.some((e) => e.message.indexOf('выключен вручную (выключатель)') >= 0)).toBe(true);
+  });
+
+  it('питание включили вручную при выключенном термостате → термостат включается в последний режим', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
+    const vars = freshVars();
+    vars.lastUserTargetState = 2;
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    // Термостат выключен → сценарий выключает питание
+    runTrigger(scenario, t, options, vars, 0);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+
+    // Пользователь включает кондиционер (вне окна)
+    expireEchoWindow(vars);
+    ac.char(HS.Fan, HC.On).setValue(true);
+
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(vars.acManualOverride).toBe(false);
+  });
+
+  it('запоздалое «питание ON» внутри окна после выключения → переотправка, термостат не включается', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 0);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+
+    // Устройство переизлучает «включено» внутри окна
+    ac.char(HS.Fan, HC.On).setValue(true);
+
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+    expect(vars.acManualOverride).toBe(false);
+  });
+});
+
+describe('AC §"Регрессия: упорное устройство не включает термостат в окне"', () => {
+  it('лимит переотправок исчерпан при выключенном термостате → термостат остаётся выключенным', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 0);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+
+    // Устройство упорно сообщает 2 пять раз подряд внутри окна (как VIOMI)
+    for (let i = 0; i < 5; i++) {
+      ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    }
+
+    // Термостат НЕ включился обратно
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    expect(vars.acManualOverride).toBe(false);
   });
 });
 
