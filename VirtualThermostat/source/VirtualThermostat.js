@@ -11,7 +11,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.2.4-ac",
+    version: "3.2.5-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -758,7 +758,10 @@ function subscribeToAcState(service, variables, options) {
                     const count = (variables.acReassertCount || 0) + 1
                     if (count <= AC_REASSERT_MAX) {
                         variables.acReassertCount = count
-                        logWarn(`Кондиционер сообщил режим ${numValue}, ожидается ${desired} (через ${Math.round(sinceCmd / 1000)}с после команды) — повторяю команду (${count}/${AC_REASSERT_MAX})`, thermostatSource)
+                        // Без деления и слэшей внутри шаблонной строки: парсер Nashorn в Sprut.Hub
+                        // принимает '/' рядом с ${} за начало регулярного выражения.
+                        const sinceSec = Math.round(sinceCmd * 0.001)
+                        logWarn("Кондиционер сообщил режим " + numValue + ", ожидается " + desired + " (через " + sinceSec + "с после команды) — повторяю команду (" + count + " из " + AC_REASSERT_MAX + ")", thermostatSource)
                         const temp = desired == 1 ? getAcHeatTemp(options) : (desired == 2 ? getAcCoolTemp(options) : null)
                         setAcMode(acService, desired, temp, thermostatSource, options, variables)
                         return
