@@ -1056,6 +1056,60 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
   });
 });
 
+describe('AC §"Окно времени вентилятора без компрессора"', () => {
+  it('час внутри окна (8–23) → вентилятор без компрессора', ({ hub, scenario, time }) => {
+    time.set('2024-06-21T12:00:00Z'); // 12:00
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 8, acFanOnlyTo: 23 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
+  });
+
+  it('час вне окна (ночь) → кондиционер в простое выключается полностью', ({ hub, scenario, time }) => {
+    time.set('2024-06-21T02:00:00Z'); // 02:00 — ночь
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 8, acFanOnlyTo: 23 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
+  it('интервал через полночь (22–7): в 23 часа активен, в 12 — нет', ({ hub, scenario, time }) => {
+    const options = (ac) => baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 22, acFanOnlyTo: 7 });
+
+    time.set('2024-06-21T23:00:00Z');
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    runTrigger(scenario, t, options(ac), vars, 2);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+
+    time.set('2024-06-22T12:00:00Z');
+    runTrigger(scenario, t, options(ac), vars, 2);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
+  it('совпадающие границы (0–0) → круглосуточно', ({ hub, scenario, time }) => {
+    time.set('2024-06-21T03:00:00Z');
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 0, acFanOnlyTo: 0 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+  });
+});
+
 describe('AC §"Эмуляция термостата + кондиционер"', () => {
   it('emulateThermostat: жарко (27 > 24+0.5) → currentState=2 и кондиционер включается', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 27, targetTemp: 24 });

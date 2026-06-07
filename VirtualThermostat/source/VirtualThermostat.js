@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.5.0-ac",
+    version: "3.6.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -162,6 +162,36 @@ info = {
             },
             type: "Boolean",
             value: false
+        },
+        acFanOnlyFrom: {
+            name: {
+                en: "Fan without compressor: from hour",
+                ru: "Вентилятор без компрессора: с часа"
+            },
+            desc: {
+                ru: "Час начала действия режима «вентилятор без компрессора» (0–23). Вне интервала кондиционер при достижении цели выключается полностью. Если «с часа» и «до часа» совпадают — режим действует круглосуточно. Интервал может переходить через полночь (например, с 22 до 7).",
+                en: "Start hour (0–23) for the fan-without-compressor mode. Outside the interval the AC turns off completely when the goal is reached. Equal start/end hours mean the mode is active around the clock. The interval may cross midnight (e.g. 22 to 7)."
+            },
+            type: "Integer",
+            value: 0,
+            minValue: 0,
+            maxValue: 23,
+            minStep: 1
+        },
+        acFanOnlyTo: {
+            name: {
+                en: "Fan without compressor: until hour",
+                ru: "Вентилятор без компрессора: до часа"
+            },
+            desc: {
+                ru: "Час окончания действия режима «вентилятор без компрессора» (0–23). Например, «с 8 до 23» — днём вентилятор перемешивает воздух, а ночью кондиционер в простое выключается полностью.",
+                en: "End hour (0–23) for the fan-without-compressor mode. For example, 8 to 23 keeps the fan circulating during the day while at night the idle AC turns off completely."
+            },
+            type: "Integer",
+            value: 0,
+            minValue: 0,
+            maxValue: 23,
+            minStep: 1
         },
         acFanControl: {
             name: {
@@ -478,7 +508,7 @@ function handleHeatingCoolingLogic(source, options, variables) {
     // currentState == 0 — цель достигнута, термостат в простое
     setRelayValue(heatingRelay, false, source, options.debug)
     setRelayValue(coolingRelay, false, source, options.debug)
-    if (options.acFanOnlyAtTarget == true && acThermostat) {
+    if (isFanOnlyWindowActive(options) && acThermostat) {
         const standbyMode = toNum(targetState) == 1 ? 1 : 2
         logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер: вентилятор без компрессора`, source, options.debug)
         setAcMode(acThermostat, standbyMode, getAcStandbyTemp(acThermostat, standbyMode, options), source, options, variables)
@@ -818,10 +848,26 @@ function computeDesiredAcState(service, options) {
     if (current == 1) return 1
     if (current == 2) return 2
     // Цель достигнута (простой активного термостата)
-    if (options && options.acFanOnlyAtTarget == true) {
+    if (isFanOnlyWindowActive(options)) {
         return target == 1 ? 1 : 2
     }
     return 0
+}
+
+// Активен ли сейчас режим «вентилятор без компрессора»: опция включена
+// и текущий час внутри настроенного интервала. Совпадающие границы —
+// круглосуточно; интервал может переходить через полночь (22→7).
+function isFanOnlyWindowActive(options) {
+    if (!options || options.acFanOnlyAtTarget != true) return false
+    let from = toNum(options.acFanOnlyFrom)
+    let to = toNum(options.acFanOnlyTo)
+    if (from == null || to == null) return true
+    if (from < 0 || from > 23) from = 0
+    if (to < 0 || to > 23) to = 0
+    if (from == to) return true
+    const hour = new Date().getHours()
+    if (from < to) return hour >= from && hour < to
+    return hour >= from || hour < to
 }
 
 // Целевая температура кондиционера в активной фазе (нагрев/охлаждение).
@@ -863,7 +909,7 @@ function computeExpectedAcTemp(acService, service, options, desired) {
     if (desired == null || desired == 0) return null
     const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const current = currentChar ? toNum(currentChar.getValue()) : null
-    if (options && options.acFanOnlyAtTarget == true && current == 0) {
+    if (isFanOnlyWindowActive(options) && current == 0) {
         return getAcStandbyTemp(acService, desired, options)
     }
     return getAcActiveTemp(acService, desired, service, options)
@@ -1454,6 +1500,13 @@ function startFailureCheckCron(service, variables, options) {
     logDebug(`Создаём cron 'каждые 15 мин' для проверки отказа датчика (timeout ${getFailureTimeoutMinutes(options)} мин)`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
     variables.failureCheckTask = Cron.schedule("0 */15 * * * *", function () {
         checkSensorFailure(service, variables, options)
+        // Пересчёт состояния по расписанию: границы временного окна режима
+        // «вентилятор без компрессора» применяются даже без событий датчика.
+        // Идемпотентно — команды уходят только при реальных изменениях.
+        if (!variables.sensorFailed) {
+            const src = service.getCharacteristic(HC.CurrentTemperature)
+            if (src) handleHeatingCoolingLogic(src, options, variables)
+        }
     })
 }
 
