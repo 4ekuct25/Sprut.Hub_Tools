@@ -761,6 +761,29 @@ describe('AC §"Выключатель питания (acPowerSwitch)"', () => {
   });
 });
 
+describe('AC §"Выключатель добавлен после старта сценария"', () => {
+  it('основная подписка уже создана, опцию acPowerSwitch добавили позже → подписка на питание всё равно создаётся', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
+    const vars = freshVars();
+
+    // Первый запуск БЕЗ выключателя — создаётся только подписка на кондиционер
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac) }), vars, 2);
+    expect(vars.acPowerSubscribed).toBe(false);
+
+    // Пользователь выбрал выключатель, сценарий сработал ещё раз
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+    runTrigger(scenario, t, options, vars, 2);
+    expect(vars.acPowerSubscribed).toBe(true);
+
+    // Ручное выключение питания обрабатывается
+    expireEchoWindow(vars);
+    ac.char(HS.Fan, HC.On).setValue(false);
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+  });
+});
+
 describe('AC §"Регрессия: упорное устройство не включает термостат в окне"', () => {
   it('лимит переотправок исчерпан при выключенном термостате → термостат остаётся выключенным', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });

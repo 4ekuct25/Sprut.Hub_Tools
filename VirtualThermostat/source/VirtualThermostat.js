@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.4.0-ac",
+    version: "3.4.1-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -366,6 +366,9 @@ function trigger(source, value, variables, options, context) {
         subscribeToRelayState(service, variables, options)
         // Подписка на ручные изменения кондиционера
         subscribeToAcState(service, variables, options)
+        // Подписка на выключатель питания кондиционера (отдельно от subscribeToAcState:
+        // опция могла быть выбрана позже, когда основная подписка уже создана)
+        subscribeToAcPower(service, variables, options)
         // Проверка отказа датчика
         startFailureCheckCron(service, variables, options)
 
@@ -897,8 +900,6 @@ function subscribeToAcState(service, variables, options) {
     })
     variables.acSubscribe = subscribe
     variables.acSubscribed = true
-
-    subscribeToAcPower(service, variables, options)
 }
 
 // Включает виртуальный термостат в указанный режим (синхронизация с ручным
