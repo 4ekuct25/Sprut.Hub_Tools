@@ -11,7 +11,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.2.1-ac",
+    version: "3.2.2-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -467,15 +467,15 @@ function setAcMode(ac, state, temp, source, options, variables) {
             return
         }
 
+        // Запоминаем намерения ДО любых setValue: интеграция кондиционера может
+        // переизлучить событие «целевой режим» уже в ответ на запись температуры,
+        // и подписка должна в этот момент видеть актуальный acLastSetState.
+        if (variables) variables.acLastSetState = state
+
         if (state != 0 && temp != null) {
             const targetTempChar = ac.getCharacteristic(HC.TargetTemperature)
             if (targetTempChar) {
-                let value = temp
-                const minValue = targetTempChar.getMinValue()
-                const maxValue = targetTempChar.getMaxValue()
-                if (minValue != null && value < Number(minValue)) value = Number(minValue)
-                if (maxValue != null && value > Number(maxValue)) value = Number(maxValue)
-                // Запоминаем ДО setValue, чтобы подписка отличила эхо от ручного изменения
+                const value = clampToCharRange(temp, targetTempChar)
                 if (variables) variables.acLastSetTemp = value
                 if (Number(targetTempChar.getValue()) != value) {
                     targetTempChar.setValue(value)
@@ -485,7 +485,6 @@ function setAcMode(ac, state, temp, source, options, variables) {
         }
 
         const prevState = Number(targetStateChar.getValue())
-        if (variables) variables.acLastSetState = state
         if (prevState != state) {
             targetStateChar.setValue(state)
             logDebug(`Кондиционер ${getDeviceName(ac)}: целевой режим ${prevState} → ${state}`, source, options.debug)
@@ -655,6 +654,31 @@ function subscribeToRelayState(service, variables, options) {
     }
 }
 
+// Состояние кондиционера, которого сценарий добивается прямо сейчас,
+// исходя из живых характеристик виртуального термостата: 0 — выкл, 1 — нагрев,
+// 2 — охлаждение. null — определить нельзя.
+function computeDesiredAcState(service) {
+    const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
+    if (!targetChar || !currentChar) return null
+    const target = Number(targetChar.getValue())
+    const current = Number(currentChar.getValue())
+    if (target == 0 || target == -1 || target == -2) return 0
+    if (current == 1) return 1
+    if (current == 2) return 2
+    return 0
+}
+
+// Ограничивает значение реальным диапазоном характеристики (min/max устройства).
+function clampToCharRange(value, characteristic) {
+    let result = Number(value)
+    const minValue = characteristic.getMinValue()
+    const maxValue = characteristic.getMaxValue()
+    if (minValue != null && result < Number(minValue)) result = Number(minValue)
+    if (maxValue != null && result > Number(maxValue)) result = Number(maxValue)
+    return result
+}
+
 // Подписка на изменения кондиционера НЕ из сценария (пульт, приложение, интерфейс хаба).
 // Если целевой режим или целевая температура кондиционера изменились и это не эхо
 // собственной команды сценария — виртуальный термостат выключается (TargetHCState=0),
@@ -678,13 +702,31 @@ function subscribeToAcState(service, variables, options) {
             // характеристик могут приходить как Java-числа, и строгое === даёт false
             // даже для одинаковых чисел.
             const numValue = Number(acValue)
-            // Эхо собственных команд сценария — игнорируем
-            if (type === HC.TargetHeatingCoolingState && variables.acLastSetState != null && numValue == Number(variables.acLastSetState)) return
-            if (type === HC.TargetTemperature && variables.acLastSetTemp != null && Math.abs(numValue - Number(variables.acLastSetTemp)) < 0.05) return
-            // Кондиционер выключен сценарием: изменение уставки неважно (некоторые
-            // интеграции сами обновляют её при выключении). Ручное ВКЛЮЧЕНИЕ придёт
-            // отдельным событием смены целевого режима и будет обработано.
-            if (type === HC.TargetTemperature && variables.acLastSetState != null && Number(variables.acLastSetState) == 0) return
+            // Состояние кондиционера, которого сценарий сам сейчас добивается.
+            // Это проверка БЕЗ опоры на память (variables): если событие совпадает
+            // с желаемым состоянием — это эхо собственной команды, а не пользователь.
+            const desired = computeDesiredAcState(service)
+
+            if (type === HC.TargetHeatingCoolingState) {
+                // Эхо собственных команд сценария — игнорируем
+                if (variables.acLastSetState != null && numValue == Number(variables.acLastSetState)) return
+                if (desired != null && numValue == desired) return
+            }
+            if (type === HC.TargetTemperature) {
+                if (variables.acLastSetTemp != null && Math.abs(numValue - Number(variables.acLastSetTemp)) < 0.05) return
+                // Кондиционер выключен сценарием: изменение уставки неважно (некоторые
+                // интеграции сами обновляют её при выключении). Ручное ВКЛЮЧЕНИЕ придёт
+                // отдельным событием смены целевого режима и будет обработано.
+                if (variables.acLastSetState != null && Number(variables.acLastSetState) == 0) return
+                if (desired == 0) return
+                // Уставка совпадает с той, что выставил бы сценарий — эхо
+                if (desired != null) {
+                    const wantTemp = desired == 1 ? getAcHeatTemp(options) : getAcCoolTemp(options)
+                    const tempChar = acService.getCharacteristic(HC.TargetTemperature)
+                    const clamped = tempChar ? clampToCharRange(wantTemp, tempChar) : wantTemp
+                    if (Math.abs(numValue - clamped) < 0.05) return
+                }
+            }
 
             // Если уже в ручном режиме — ничего не делаем
             if (variables.acManualOverride) return
