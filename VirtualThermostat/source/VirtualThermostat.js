@@ -11,7 +11,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.2.3-ac",
+    version: "3.2.4-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -293,6 +293,10 @@ info = {
         acManualOverride: false,
         acSubscribe: undefined,
         acSubscribed: false,
+        // Время последней команды кондиционеру и счётчик мягких переотправок
+        // (защита от запоздалых подтверждений устройства).
+        acLastCommandTime: undefined,
+        acReassertCount: 0,
         midnightTask: undefined,
         failureCheckTask: undefined,
         sensorFailed: false,
@@ -478,6 +482,7 @@ function setAcMode(ac, state, temp, source, options, variables) {
                 const value = clampToCharRange(temp, targetTempChar)
                 if (variables) variables.acLastSetTemp = value
                 if (toNum(targetTempChar.getValue()) != value) {
+                    if (variables) variables.acLastCommandTime = Date.now()
                     targetTempChar.setValue(value)
                     logDebug(`Кондиционер ${getDeviceName(ac)}: целевая температура → ${value}°C`, source, options.debug)
                 }
@@ -486,6 +491,7 @@ function setAcMode(ac, state, temp, source, options, variables) {
 
         const prevState = toNum(targetStateChar.getValue())
         if (prevState != state) {
+            if (variables) variables.acLastCommandTime = Date.now()
             targetStateChar.setValue(state)
             logDebug(`Кондиционер ${getDeviceName(ac)}: целевой режим ${prevState} → ${state}`, source, options.debug)
         }
@@ -739,6 +745,31 @@ function subscribeToAcState(service, variables, options) {
                     const clamped = tempChar ? clampToCharRange(wantTemp, tempChar) : wantTemp
                     if (Math.abs(numValue - clamped) < 0.05) return
                 }
+            }
+
+            // Окно подавления после собственной команды. Реальные интеграции (например,
+            // VIOMI) подтверждают команды асинхронно и могут переизлучить СТАРОЕ состояние
+            // через несколько секунд после нашей записи — это не ручное вмешательство.
+            // Внутри окна расхождение не наказываем выключением термостата, а мягко
+            // повторяем команду (не более AC_REASSERT_MAX раз, дальше — ручной режим).
+            const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
+            if (sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS) {
+                if (type === HC.TargetHeatingCoolingState && desired != null && numValue != desired) {
+                    const count = (variables.acReassertCount || 0) + 1
+                    if (count <= AC_REASSERT_MAX) {
+                        variables.acReassertCount = count
+                        logWarn(`Кондиционер сообщил режим ${numValue}, ожидается ${desired} (через ${Math.round(sinceCmd / 1000)}с после команды) — повторяю команду (${count}/${AC_REASSERT_MAX})`, thermostatSource)
+                        const temp = desired == 1 ? getAcHeatTemp(options) : (desired == 2 ? getAcCoolTemp(options) : null)
+                        setAcMode(acService, desired, temp, thermostatSource, options, variables)
+                        return
+                    }
+                    // Лимит переотправок исчерпан — считаем настоящим ручным вмешательством
+                } else {
+                    // Любые другие события в окне — запоздалые подтверждения устройства
+                    return
+                }
+            } else {
+                variables.acReassertCount = 0
             }
 
             // Если уже в ручном режиме — ничего не делаем
@@ -1167,6 +1198,13 @@ function getServicesByServiceAndCharacteristicType(serviceTypes, characteristicT
     return sortedServicesList;
 }
 
+// Окно подавления запоздалых событий кондиционера после собственной команды (мс).
+// Реальные интеграции подтверждают команды асинхронно и могут переизлучить старое
+// состояние спустя несколько секунд — внутри окна такие события не считаются ручным
+// вмешательством. Ручное изменение в течение окна будет мягко перезаписано сценарием.
+const AC_ECHO_WINDOW_MS = 30000
+// Максимум мягких переотправок команды внутри окна, после — ручной режим.
+const AC_REASSERT_MAX = 3
 // Минимальный шаг времени до отказа датчика (минуты). См. опцию failureTimeout.
 const FAILURE_TIMEOUT_STEP_MIN = 15
 // Константа для отладки

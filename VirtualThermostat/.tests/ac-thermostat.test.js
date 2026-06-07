@@ -114,6 +114,8 @@ function freshVars() {
     acManualOverride: false,
     acSubscribe: undefined,
     acSubscribed: false,
+    acLastCommandTime: undefined,
+    acReassertCount: 0,
     midnightTask: undefined,
     failureCheckTask: undefined,
     sensorFailed: false,
@@ -123,6 +125,12 @@ function freshVars() {
 
 function acUUID(ac) {
   return ac.getService(HS.Thermostat).getUUID();
+}
+
+// Делает вид, что окно подавления запоздалых событий (AC_ECHO_WINDOW_MS) истекло —
+// последующие события кондиционера трактуются как настоящее ручное вмешательство.
+function expireEchoWindow(vars) {
+  if (vars.acLastCommandTime != null) vars.acLastCommandTime = Date.now() - 31000;
 }
 
 function runTrigger(scenario, t, options, vars, value) {
@@ -381,7 +389,8 @@ describe('AC §"Ручное вмешательство"', () => {
     runTrigger(scenario, t, options, vars, 2);
     expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
 
-    // Пользователь выключает кондиционер пультом
+    // Пользователь выключает кондиционер пультом (окно подавления уже истекло)
+    expireEchoWindow(vars);
     ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(0);
 
     // Виртуальный термостат выключился, флаг ручного управления стоит
@@ -402,6 +411,7 @@ describe('AC §"Ручное вмешательство"', () => {
     const options = baseOptions({ acThermostat: acUUID(ac) });
 
     runTrigger(scenario, t, options, vars, 2);
+    expireEchoWindow(vars);
     ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(3);
 
     expect(vars.acManualOverride).toBe(true);
@@ -418,6 +428,7 @@ describe('AC §"Ручное вмешательство"', () => {
     runTrigger(scenario, t, options, vars, 2);
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(17);
 
+    expireEchoWindow(vars);
     ac.char(HS.Thermostat, HC.TargetTemperature).setValue(22);
 
     expect(vars.acManualOverride).toBe(true);
@@ -477,6 +488,7 @@ describe('AC §"Ручное вмешательство"', () => {
 
     runTrigger(scenario, t, options, vars, 2);
     // Пользователь ставит режим Авто пультом → override
+    expireEchoWindow(vars);
     ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(3);
     expect(vars.acManualOverride).toBe(true);
 
@@ -498,6 +510,7 @@ describe('AC §"Ручное вмешательство"', () => {
     const options = baseOptions({ acThermostat: acUUID(ac) });
 
     runTrigger(scenario, t, options, vars, 2);
+    expireEchoWindow(vars);
     ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(0); // пульт: выкл
     expect(vars.acManualOverride).toBe(true);
 
@@ -509,6 +522,67 @@ describe('AC §"Ручное вмешательство"', () => {
     expect(vars.acManualOverride).toBe(false);
     expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(17);
+  });
+});
+
+describe('AC §"Окно подавления запоздалых событий"', () => {
+  it('запоздалое событие устройства внутри окна → НЕ ручное вмешательство, команда переотправляется', ({ hub, scenario, logs }) => {
+    // Сценарий выключает кондиционер (деманд снят), устройство через пару секунд
+    // переизлучает старое состояние 2 — как VIOMI в реальной жизни.
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.5, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+
+    // Запоздалое «2» от устройства (окно ещё активно)
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+
+    // Термостат НЕ выключен, override не стоит, кондиционер возвращён в 0
+    expect(vars.acManualOverride).toBe(false);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    expect(vars.acReassertCount).toBe(1);
+    const warns = logs.byLevel('warn');
+    expect(warns.some((e) => e.message.indexOf('повторяю команду') >= 0)).toBe(true);
+  });
+
+  it('запоздалое изменение уставки внутри окна → игнорируется', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+    // Устройство переизлучает свою уставку внутри окна
+    ac.char(HS.Thermostat, HC.TargetTemperature).setValue(24);
+
+    expect(vars.acManualOverride).toBe(false);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+  });
+
+  it('лимит переотправок исчерпан → ручное вмешательство', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.5, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    // Устройство упорно сообщает 2 четыре раза подряд (внутри окна)
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    expect(vars.acReassertCount).toBe(3);
+    expect(vars.acManualOverride).toBe(false);
+
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    // Кондиционер остаётся как есть — сценарий больше не воюет
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
   });
 });
 
