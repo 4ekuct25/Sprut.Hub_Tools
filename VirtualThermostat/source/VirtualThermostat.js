@@ -11,7 +11,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.2.2-ac",
+    version: "3.2.3-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -318,7 +318,7 @@ function trigger(source, value, variables, options, context) {
             }
             variables.lastUserTargetState = value
             // Пользователь снова включил термостат — возобновляем управление кондиционером
-            if (Number(value) != 0 && variables.acManualOverride) {
+            if (toNum(value) != 0 && variables.acManualOverride) {
                 variables.acManualOverride = false
                 logWarn("Виртуальный термостат включён пользователем — возобновляю управление кондиционером", source)
             }
@@ -477,14 +477,14 @@ function setAcMode(ac, state, temp, source, options, variables) {
             if (targetTempChar) {
                 const value = clampToCharRange(temp, targetTempChar)
                 if (variables) variables.acLastSetTemp = value
-                if (Number(targetTempChar.getValue()) != value) {
+                if (toNum(targetTempChar.getValue()) != value) {
                     targetTempChar.setValue(value)
                     logDebug(`Кондиционер ${getDeviceName(ac)}: целевая температура → ${value}°C`, source, options.debug)
                 }
             }
         }
 
-        const prevState = Number(targetStateChar.getValue())
+        const prevState = toNum(targetStateChar.getValue())
         if (prevState != state) {
             targetStateChar.setValue(state)
             logDebug(`Кондиционер ${getDeviceName(ac)}: целевой режим ${prevState} → ${state}`, source, options.debug)
@@ -654,6 +654,16 @@ function subscribeToRelayState(service, variables, options) {
     }
 }
 
+// Надёжное приведение значения характеристики к числу. Значения из Sprut.Hub
+// могут быть Java-объектами: Number() для них иногда даёт NaN, поэтому
+// fallback — парсинг через строковое представление.
+function toNum(value) {
+    if (value == null) return null
+    let n = Number(value)
+    if (isNaN(n)) n = parseFloat(String(value))
+    return isNaN(n) ? null : n
+}
+
 // Состояние кондиционера, которого сценарий добивается прямо сейчас,
 // исходя из живых характеристик виртуального термостата: 0 — выкл, 1 — нагрев,
 // 2 — охлаждение. null — определить нельзя.
@@ -661,8 +671,9 @@ function computeDesiredAcState(service) {
     const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
     const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     if (!targetChar || !currentChar) return null
-    const target = Number(targetChar.getValue())
-    const current = Number(currentChar.getValue())
+    const target = toNum(targetChar.getValue())
+    const current = toNum(currentChar.getValue())
+    if (target == null || current == null) return null
     if (target == 0 || target == -1 || target == -2) return 0
     if (current == 1) return 1
     if (current == 2) return 2
@@ -671,11 +682,11 @@ function computeDesiredAcState(service) {
 
 // Ограничивает значение реальным диапазоном характеристики (min/max устройства).
 function clampToCharRange(value, characteristic) {
-    let result = Number(value)
-    const minValue = characteristic.getMinValue()
-    const maxValue = characteristic.getMaxValue()
-    if (minValue != null && result < Number(minValue)) result = Number(minValue)
-    if (maxValue != null && result > Number(maxValue)) result = Number(maxValue)
+    let result = toNum(value)
+    const minValue = toNum(characteristic.getMinValue())
+    const maxValue = toNum(characteristic.getMaxValue())
+    if (minValue != null && result < minValue) result = minValue
+    if (maxValue != null && result > maxValue) result = maxValue
     return result
 }
 
@@ -698,29 +709,31 @@ function subscribeToAcState(service, variables, options) {
             if (acService.getUUID() != options.acThermostat) return
 
             const type = acSource.getType()
-            // ВАЖНО: значения сравниваем через Number() и == — в Sprut.Hub значения
-            // характеристик могут приходить как Java-числа, и строгое === даёт false
-            // даже для одинаковых чисел.
-            const numValue = Number(acValue)
+            // ВАЖНО: значения сравниваем и «сырыми» через ==, и приведёнными к числу —
+            // в Sprut.Hub значения характеристик могут приходить как Java-объекты.
+            const numValue = toNum(acValue)
             // Состояние кондиционера, которого сценарий сам сейчас добивается.
             // Это проверка БЕЗ опоры на память (variables): если событие совпадает
             // с желаемым состоянием — это эхо собственной команды, а не пользователь.
             const desired = computeDesiredAcState(service)
 
+            logDebug(`AC-событие: ${type} = ${acValue} (typeof ${typeof acValue}, num ${numValue}), lastSetState=${variables.acLastSetState}, lastSetTemp=${variables.acLastSetTemp}, desired=${desired}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
+
             if (type === HC.TargetHeatingCoolingState) {
                 // Эхо собственных команд сценария — игнорируем
-                if (variables.acLastSetState != null && numValue == Number(variables.acLastSetState)) return
-                if (desired != null && numValue == desired) return
+                if (variables.acLastSetState != null && (acValue == variables.acLastSetState || numValue == toNum(variables.acLastSetState))) return
+                if (desired != null && (acValue == desired || numValue == desired)) return
             }
             if (type === HC.TargetTemperature) {
-                if (variables.acLastSetTemp != null && Math.abs(numValue - Number(variables.acLastSetTemp)) < 0.05) return
+                const lastTemp = toNum(variables.acLastSetTemp)
+                if (lastTemp != null && numValue != null && Math.abs(numValue - lastTemp) < 0.05) return
                 // Кондиционер выключен сценарием: изменение уставки неважно (некоторые
                 // интеграции сами обновляют её при выключении). Ручное ВКЛЮЧЕНИЕ придёт
                 // отдельным событием смены целевого режима и будет обработано.
-                if (variables.acLastSetState != null && Number(variables.acLastSetState) == 0) return
+                if (variables.acLastSetState != null && toNum(variables.acLastSetState) == 0) return
                 if (desired == 0) return
                 // Уставка совпадает с той, что выставил бы сценарий — эхо
-                if (desired != null) {
+                if (desired != null && numValue != null) {
                     const wantTemp = desired == 1 ? getAcHeatTemp(options) : getAcCoolTemp(options)
                     const tempChar = acService.getCharacteristic(HC.TargetTemperature)
                     const clamped = tempChar ? clampToCharRange(wantTemp, tempChar) : wantTemp
@@ -874,15 +887,15 @@ function updateAcFanSpeed(service, variables, options) {
             return
         }
 
-        const acCurrentSpeed = Number(acFanChar.getValue())
+        const acCurrentSpeed = toNum(acFanChar.getValue())
 
         // Пользователь вернул Авто (0) — снимаем фиксацию
-        if (acCurrentSpeed == 0 && Number(acFanChar.getMinValue()) == 0) {
+        if (acCurrentSpeed == 0 && toNum(acFanChar.getMinValue()) == 0) {
             if (variables.acFanSpeedManuallySet) {
                 logDebug(`Вентилятор кондиционера: пользователь поставил Авто (0) — снимаем фиксацию`, acFanChar, options.debug)
                 variables.acFanSpeedManuallySet = false
             }
-        } else if (variables.acLastSetFanSpeed != null && acCurrentSpeed != Number(variables.acLastSetFanSpeed)) {
+        } else if (variables.acLastSetFanSpeed != null && acCurrentSpeed != toNum(variables.acLastSetFanSpeed)) {
             // Значение изменилось не сценарием — ручное вмешательство
             if (options.fanSpeedManualLock == true && !variables.acFanSpeedManuallySet) {
                 logDebug(`Вентилятор кондиционера: скорость ${acCurrentSpeed} установлена вручную — фиксируем`, acFanChar, options.debug)
@@ -903,8 +916,8 @@ function updateAcFanSpeed(service, variables, options) {
         let speed = computed.speed
         const maxSpeed = acFanChar.getMaxValue()
         const minSpeed = acFanChar.getMinValue()
-        if (maxSpeed != null && speed > Number(maxSpeed)) speed = Number(maxSpeed)
-        if (minSpeed != null && speed < Number(minSpeed)) speed = Number(minSpeed)
+        if (toNum(maxSpeed) != null && speed > toNum(maxSpeed)) speed = toNum(maxSpeed)
+        if (toNum(minSpeed) != null && speed < toNum(minSpeed)) speed = toNum(minSpeed)
 
         if (acCurrentSpeed != speed) {
             acFanChar.setValue(speed)
