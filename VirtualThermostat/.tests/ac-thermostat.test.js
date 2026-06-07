@@ -724,6 +724,23 @@ describe('AC §"Выключатель питания (acPowerSwitch)"', () => {
     expect(warns.some((e) => e.message.indexOf('выключен вручную (выключатель)') >= 0)).toBe(true);
   });
 
+  it('питание включили вручную, кондиционер в режиме ОБОГРЕВ → термостат включается в Нагрев', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 20, targetTemp: 24 });
+    // Пульт выставил на кондиционере обогрев
+    const ac = makeAc(hub, 20, { targetState: 1, targetTemp: 30, withPower: true, power: false });
+    const vars = freshVars();
+    vars.lastUserTargetState = 2; // на термостате юзер последний раз охлаждал
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 0);
+    expireEchoWindow(vars);
+    ac.char(HS.Fan, HC.On).setValue(true);
+
+    // Режим взят с кондиционера (Нагрев), а не из памяти термостата (Охлаждение)
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(1);
+    expect(vars.acManualOverride).toBe(false);
+  });
+
   it('питание включили вручную при выключенном термостате → термостат включается в последний режим', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });

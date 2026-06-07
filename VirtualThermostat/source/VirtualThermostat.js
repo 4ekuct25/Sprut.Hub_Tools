@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.4.2-ac",
+    version: "3.4.3-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -909,17 +909,19 @@ function subscribeToAcState(service, variables, options) {
 }
 
 // Включает виртуальный термостат в указанный режим (синхронизация с ручным
-// включением кондиционера). Снимает ручной режим.
+// включением кондиционера). Снимает ручной режим. Возвращает true при успехе.
 function turnOnVirtualThermostat(service, mode, variables, source) {
     const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
-    if (!targetChar) return
+    if (!targetChar) return false
     variables.acManualOverride = false
     variables.acReassertCount = 0
     logWarn("Кондиционер включён вручную (режим " + mode + ") — включаю виртуальный термостат", source)
     targetChar.setValue(mode)
     if (toNum(targetChar.getValue()) != mode) {
         logWarn("Не удалось включить виртуальный термостат в режим " + mode + " — похоже, этот режим выключен в настройках виртуального устройства", source)
+        return false
     }
+    return true
 }
 
 // Подписка на выключатель питания кондиционера (опция acPowerSwitch).
@@ -977,10 +979,25 @@ function subscribeToAcPower(service, variables, options) {
             // Термостат выключен, питание включили вручную → включаем термостат
             if (virtualTarget == 0) {
                 if (isOn === true && !inEchoWindow) {
-                    // Последний пользовательский режим, по умолчанию Охлаждение
-                    let mode = toNum(variables.lastUserTargetState)
-                    if (mode != 1 && mode != 2 && mode != 3) mode = 2
-                    turnOnVirtualThermostat(service, mode, variables, thermostatSource)
+                    // Режим берём С САМОГО КОНДИЦИОНЕРА (что выставил пульт: обогрев →
+                    // Нагрев и т.д.) — события питания и режима приходят в произвольном
+                    // порядке, и память термостата может не совпадать с желанием
+                    // пользователя. Fallback: последний режим термостата, затем Охлаждение.
+                    let mode = null
+                    const acThermostat = getAcThermostat(service, options)
+                    if (acThermostat) {
+                        const acModeChar = acThermostat.getCharacteristic(HC.TargetHeatingCoolingState)
+                        const acMode = acModeChar ? toNum(acModeChar.getValue()) : null
+                        if (acMode == 1 || acMode == 2 || acMode == 3) mode = acMode
+                    }
+                    let fallback = toNum(variables.lastUserTargetState)
+                    if (fallback != 1 && fallback != 2 && fallback != 3) fallback = 2
+                    if (mode == null) mode = fallback
+                    // Если режим кондиционера не поддерживается виртуальным термостатом
+                    // (выключен в настройках устройства) — пробуем fallback
+                    if (!turnOnVirtualThermostat(service, mode, variables, thermostatSource) && mode != fallback) {
+                        turnOnVirtualThermostat(service, fallback, variables, thermostatSource)
+                    }
                 }
                 return
             }
