@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.4.1-ac",
+    version: "3.4.2-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -383,6 +383,12 @@ function handleFanSpeedChange(service, value, variables, options, context) {
     const fanSpeedChar = service.getCharacteristic(HC.C_FanSpeed)
     if (isSelfChange) {
         logDebug(`Скорость вентилятора изменена самим сценарием — игнорируем`, fanSpeedChar, options.debug)
+        return
+    }
+    // Системное переигрывание характеристик (пересохранение настроек привязки,
+    // старт хаба) — это не действие пользователя, фиксацию не меняем
+    if (isSystemReplayContext(context)) {
+        logDebug(`Скорость вентилятора: системное событие (${context}) — фиксацию не меняем`, fanSpeedChar, options.debug)
         return
     }
     if (value == 0) {
@@ -1444,6 +1450,20 @@ function getAccessoryIdFromUUID(uuid) {
         return parts[0]
     }
     return undefined
+}
+
+// Системное переигрывание характеристик — НЕ действие пользователя.
+// Признаки: контекст старта хаба (HUB[OnStart]) или цепочка вида
+// 'LOGIC[...] <- WEB/CLOUD[...]' без звена C[...] между ними — так выглядит
+// пересохранение настроек привязки логики, когда хаб переотправляет значения
+// всех характеристик скопом.
+function isSystemReplayContext(context) {
+    const ctx = context.toString()
+    if (ctx.indexOf('HUB[OnStart]') >= 0) return true
+    const elements = ctx.split(' <- ')
+    return elements.length >= 2 &&
+        elements[0].indexOf('LOGIC') == 0 &&
+        elements[1].indexOf('C[') != 0
 }
 
 function isSelfChangeByContext(context) {
