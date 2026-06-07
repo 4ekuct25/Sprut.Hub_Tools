@@ -448,17 +448,74 @@ describe('AC §"Ручное вмешательство"', () => {
     expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
   });
 
-  it('термостат выключен → пользователь свободно крутит кондиционер, override не ставится', ({ hub, scenario }) => {
+  it('термостат выключен, кондиционер включили вручную → термостат ВКЛЮЧАЕТСЯ в тот же режим', ({ hub, scenario, logs }) => {
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac) }), vars, 0);
+    expireEchoWindow(vars);
+    // Пользователь включает кондиционер пультом в режим Охлаждение
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(vars.acManualOverride).toBe(false);
+    const warns = logs.byLevel('warn');
+    expect(warns.some((e) => e.message.indexOf('включаю виртуальный термостат') >= 0)).toBe(true);
+  });
+
+  it('термостат выключен, смена уставки кондиционера → термостат НЕ включается', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 24, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24 });
     const vars = freshVars();
 
     runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac) }), vars, 0);
+    expireEchoWindow(vars);
+    ac.char(HS.Thermostat, HC.TargetTemperature).setValue(20);
+
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    expect(vars.acManualOverride).toBe(false);
+  });
+
+  it('цикл: выключили AC пультом (термостат off) → включили AC пультом (термостат on, override снят)', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    // Сценарий охлаждает
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+
+    // Пользователь выключает кондиционер пультом → термостат выключается, override
+    expireEchoWindow(vars);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(0);
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+
+    // Пользователь включает кондиционер пультом → термостат включается, override снят
+    expireEchoWindow(vars);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    expect(vars.acManualOverride).toBe(false);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+  });
+
+  it('запоздалое «2» в окне при выключенном термостате → термостат НЕ включается, команда переотправлена', ({ hub, scenario }) => {
+    // Сценарий только что выключил кондиционер (термостат выключен пользователем)
+    const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 0);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+
+    // Устройство переизлучает старое «2» внутри окна
     ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
 
-    expect(vars.acManualOverride).toBe(false);
     expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
-    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    expect(vars.acManualOverride).toBe(false);
   });
 
   it('смена уставки при выключенном сценарием кондиционере (standby) → игнорируется', ({ hub, scenario }) => {

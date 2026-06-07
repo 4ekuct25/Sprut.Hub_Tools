@@ -11,7 +11,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.2.5-ac",
+    version: "3.3.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -697,10 +697,13 @@ function clampToCharRange(value, characteristic) {
 }
 
 // Подписка на изменения кондиционера НЕ из сценария (пульт, приложение, интерфейс хаба).
-// Если целевой режим или целевая температура кондиционера изменились и это не эхо
-// собственной команды сценария — виртуальный термостат выключается (TargetHCState=0),
-// ставится флаг acManualOverride и сценарий перестаёт трогать кондиционер,
-// пока пользователь снова не включит виртуальный термостат.
+// Синхронизация по питанию:
+// • Термостат активен, кондиционер изменили вручную (режим/уставка) — термостат
+//   выключается (TargetHCState=0), ставится acManualOverride, сценарий перестаёт
+//   трогать кондиционер.
+// • Термостат выключен, кондиционер ВКЛЮЧИЛИ вручную — термостат включается
+//   в соответствующий режим (Нагрев/Охлаждение/Авто) и берёт управление.
+// Эхо собственных команд и запоздалые подтверждения устройства отфильтровываются.
 function subscribeToAcState(service, variables, options) {
     const acThermostat = getAcThermostat(service, options)
     if (!acThermostat) return
@@ -725,14 +728,25 @@ function subscribeToAcState(service, variables, options) {
 
             logDebug(`AC-событие: ${type} = ${acValue} (typeof ${typeof acValue}, num ${numValue}), lastSetState=${variables.acLastSetState}, lastSetTemp=${variables.acLastSetTemp}, desired=${desired}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
 
+            // Окно подавления после собственной команды. Реальные интеграции (например,
+            // VIOMI) подтверждают команды асинхронно и могут переизлучить СТАРОЕ состояние
+            // через несколько секунд после нашей записи — это не ручное вмешательство.
+            const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
+            const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
+
             if (type === HC.TargetHeatingCoolingState) {
-                // Эхо собственных команд сценария — игнорируем
-                if (variables.acLastSetState != null && (acValue == variables.acLastSetState || numValue == toNum(variables.acLastSetState))) return
-                if (desired != null && (acValue == desired || numValue == desired)) return
+                // Событие совпадает с тем, чего сценарий сам добивается — эхо/подтверждение
+                if (desired != null && (acValue == desired || numValue == desired)) {
+                    if (!inEchoWindow) variables.acReassertCount = 0
+                    return
+                }
+                // Эхо последней команды — учитываем только внутри окна: вне окна
+                // совпадение со старой командой ничего не значит (память устарела)
+                if (inEchoWindow && variables.acLastSetState != null && (acValue == variables.acLastSetState || numValue == toNum(variables.acLastSetState))) return
             }
             if (type === HC.TargetTemperature) {
                 const lastTemp = toNum(variables.acLastSetTemp)
-                if (lastTemp != null && numValue != null && Math.abs(numValue - lastTemp) < 0.05) return
+                if (inEchoWindow && lastTemp != null && numValue != null && Math.abs(numValue - lastTemp) < 0.05) return
                 // Кондиционер выключен сценарием: изменение уставки неважно (некоторые
                 // интеграции сами обновляют её при выключении). Ручное ВКЛЮЧЕНИЕ придёт
                 // отдельным событием смены целевого режима и будет обработано.
@@ -747,13 +761,9 @@ function subscribeToAcState(service, variables, options) {
                 }
             }
 
-            // Окно подавления после собственной команды. Реальные интеграции (например,
-            // VIOMI) подтверждают команды асинхронно и могут переизлучить СТАРОЕ состояние
-            // через несколько секунд после нашей записи — это не ручное вмешательство.
-            // Внутри окна расхождение не наказываем выключением термостата, а мягко
-            // повторяем команду (не более AC_REASSERT_MAX раз, дальше — ручной режим).
-            const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
-            if (sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS) {
+            // Запоздалые расхождения внутри окна не наказываем выключением термостата,
+            // а мягко повторяем команду (не более AC_REASSERT_MAX раз, дальше — ручной режим).
+            if (inEchoWindow) {
                 if (type === HC.TargetHeatingCoolingState && desired != null && numValue != desired) {
                     const count = (variables.acReassertCount || 0) + 1
                     if (count <= AC_REASSERT_MAX) {
@@ -775,13 +785,30 @@ function subscribeToAcState(service, variables, options) {
                 variables.acReassertCount = 0
             }
 
+            const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+            const virtualTarget = targetChar ? toNum(targetChar.getValue()) : 0
+
+            // Термостат выключен, а кондиционер включили не из сценария —
+            // включаем виртуальный термостат в соответствующий режим (синхронизация
+            // по питанию). Дальше термостат берёт управление: применит свою логику
+            // по внешнему датчику и форсированную уставку.
+            if (virtualTarget == 0) {
+                if (type === HC.TargetHeatingCoolingState && numValue != null && (numValue == 1 || numValue == 2 || numValue == 3)) {
+                    variables.acManualOverride = false
+                    variables.acReassertCount = 0
+                    logWarn("Кондиционер включён вручную (режим " + numValue + ") — включаю виртуальный термостат", thermostatSource)
+                    targetChar.setValue(numValue)
+                    if (toNum(targetChar.getValue()) != numValue) {
+                        logWarn("Не удалось включить виртуальный термостат в режим " + numValue + " — похоже, этот режим выключен в настройках виртуального устройства", thermostatSource)
+                    }
+                }
+                // Остальные изменения (уставка, вентиляция/осушение) при выключенном
+                // термостате — пользователь свободно управляет кондиционером
+                return
+            }
+
             // Если уже в ручном режиме — ничего не делаем
             if (variables.acManualOverride) return
-
-            const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
-            const virtualTarget = targetChar ? targetChar.getValue() : 0
-            // Термостат выключен — пользователь свободно управляет кондиционером
-            if (virtualTarget == 0) return
 
             variables.acManualOverride = true
             const what = type === HC.TargetTemperature ? `целевая температура → ${acValue}°C` : `целевой режим → ${acValue}`
