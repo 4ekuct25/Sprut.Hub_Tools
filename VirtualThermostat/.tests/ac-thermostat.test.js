@@ -760,6 +760,28 @@ describe('AC §"Выключатель питания (acPowerSwitch)"', () => {
     expect(vars.acManualOverride).toBe(false);
   });
 
+  it('питание включили вручную при термостате В ПРОСТОЕ → термостат выключается, кондиционер остаётся пользователю', ({ hub, scenario, logs }) => {
+    // Термостат активен (Охлаждение), но в простое: комната уже холодная → кондиционер выключен сценарием
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.5, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+
+    // Пользователь включает кондиционер пультом (вне окна)
+    expireEchoWindow(vars);
+    ac.char(HS.Fan, HC.On).setValue(true);
+
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+    // Кондиционер НЕ выключен обратно — остался пользователю
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+    const warns = logs.byLevel('warn');
+    expect(warns.some((e) => e.message.indexOf('хотя термостат в простое') >= 0)).toBe(true);
+  });
+
   it('запоздалое «питание ON» внутри окна после выключения → переотправка, термостат не включается', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 0, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });

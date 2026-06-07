@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.4.4-ac",
+    version: "3.4.5-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1001,10 +1001,19 @@ function subscribeToAcPower(service, variables, options) {
 
             if (variables.acManualOverride) return
 
-            // Термостат активен, питание выключили вручную → выключаем термостат
+            // Термостат активен, питание изменили вручную → ручное вмешательство:
+            // выключаем термостат и отдаём кондиционер пользователю.
+            // • isOn=false: пользователь выключил кондиционер.
+            // • isOn=true: термостат в простое (desired=0), а кондиционер включили
+            //   пультом — без этой ветки сценарий молча выключил бы его при следующем
+            //   пересчёте, воюя с пользователем.
             if (isOn === false) {
                 variables.acManualOverride = true
                 logWarn("Кондиционер выключен вручную (выключатель) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат или кондиционер снова.", thermostatSource)
+                targetChar.setValue(0)
+            } else if (isOn === true) {
+                variables.acManualOverride = true
+                logWarn("Кондиционер включён вручную, хотя термостат в простое — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат снова.", thermostatSource)
                 targetChar.setValue(0)
             }
         } catch (e) {
