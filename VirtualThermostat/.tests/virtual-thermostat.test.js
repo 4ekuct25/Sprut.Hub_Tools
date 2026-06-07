@@ -1408,7 +1408,7 @@ describe('README §"Смена режима во время отказа"', () =
     expect(vars.lastUserTargetState).toBe(2);
     // Лог-ошибка
     const errors = logs.byLevel('error');
-    const hasUserChangeLog = errors.some((e) => e.message.indexOf('Пользователь сменил Целевой режим') >= 0);
+    const hasUserChangeLog = errors.some((e) => e.message.indexOf('Датчик температуры отказал. Режим будет сброшен в Выключен') >= 0);
     expect(hasUserChangeLog).toBe(true);
     // applyFailureBehavior сбросил Целевой режим в 0 и реле выкл
     expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
@@ -1435,7 +1435,7 @@ describe('README §"Смена режима во время отказа"', () =
 
     expect(vars.lastUserTargetState).toBe(0);
     const errors = logs.byLevel('error');
-    const hasUserChangeLog = errors.some((e) => e.message.indexOf('Пользователь сменил Целевой режим') >= 0);
+    const hasUserChangeLog = errors.some((e) => e.message.indexOf('Датчик температуры отказал. Режим будет сброшен в Выключен') >= 0);
     expect(hasUserChangeLog).toBe(false);
   });
 });

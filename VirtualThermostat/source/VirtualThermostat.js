@@ -1,17 +1,18 @@
 let servicesList = getServicesByServiceAndCharacteristicType([HS.Switch, HS.Outlet], [HC.On]);
 let sensorsServicesList = getServicesByServiceAndCharacteristicType([HS.TemperatureSensor, HS.Thermostat], [HC.CurrentTemperature]);
+let acServicesList = getServicesByServiceAndCharacteristicType([HS.Thermostat], [HC.TargetHeatingCoolingState]);
 
 // Выносим описание в переменную для использования в info и options
 let scenarioDescription = {
-    ru: "Позволяет реализовать логику виртуального термостата, указав датчик температуры и реле для нагрева или охлаждения. Сценарий получает и устанавливает температуру в помещении, а также включает и отключает реле нагрева и охлаждения в зависимости от текущей и целевой температуры. Поддерживает целевые режимы: Нагрев, Охлаждение, Автоматический и Выключен. Автоматически управляет скоростью вентилятора (если доступна характеристика C_FanSpeed) на основе разницы между текущей и целевой температурой.",
-    en: "Allows you to implement virtual thermostat logic by specifying a temperature sensor and relays for heating or cooling. The scenario receives and sets the temperature in the room, and also turns heating and cooling relays on and off depending on the current and target temperatures. Supports target modes: Heating, Cooling, Automatic and Off. Automatically controls fan speed (if C_FanSpeed characteristic is available) based on the difference between current and target temperature."
+    ru: "Позволяет реализовать логику виртуального термостата, указав датчик температуры и исполнительные устройства: реле нагрева/охлаждения и/или кондиционер (сервис Термостат). Сценарий получает и устанавливает температуру в помещении, включает и отключает реле, а кондиционер переводит в режим Нагрев/Охлаждение с форсированной целевой температурой и выключает его, когда требование снято. Поддерживает целевые режимы: Нагрев, Охлаждение, Автоматический и Выключен. Автоматически управляет скоростью вентилятора (если доступна характеристика C_FanSpeed) на основе разницы между текущей и целевой температурой.",
+    en: "Allows you to implement virtual thermostat logic by specifying a temperature sensor and actuators: heating/cooling relays and/or an air conditioner (Thermostat service). The scenario receives and sets the room temperature, switches relays on and off, and drives the AC to Heat/Cool mode with a forced target temperature, turning it off when the demand is over. Supports target modes: Heating, Cooling, Automatic and Off. Automatically controls fan speed (if the C_FanSpeed characteristic is available) based on the difference between current and target temperature."
 };
 
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.0",
-    author: "@BOOMikru",
+    version: "3.2-ac",
+    author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
     sourceServices: [HS.Thermostat],
@@ -69,6 +70,71 @@ info = {
             value: "",
             formType: "list",
             values: servicesList
+        },
+        ac: {
+            name: {
+                en: "  AIR CONDITIONER",
+                ru: "  КОНДИЦИОНЕР"
+            },
+            type: "String",
+            value: "",
+            formType: "status"
+        },
+        acThermostat: {
+            name: {
+                en: "Air conditioner (Thermostat service)",
+                ru: "Кондиционер (сервис Термостат)"
+            },
+            desc: {
+                ru: "Выберите сервис Термостат вашего кондиционера (например, 'Режим кондиционера'). Когда виртуальный термостат требует охлаждение — кондиционер включается в режим Охлаждение с заданной ниже целевой температурой; когда требуется нагрев — в режим Нагрев; когда требование снято — кондиционер выключается. Не выбирайте сам виртуальный термостат.",
+                en: "Select the Thermostat service of your air conditioner. When the virtual thermostat demands cooling, the AC is switched to Cool mode with the target temperature set below; when heating is demanded — to Heat mode; when demand is over, the AC is turned off. Do not select the virtual thermostat itself."
+            },
+            type: "String",
+            value: "",
+            formType: "list",
+            values: acServicesList
+        },
+        acCoolTemp: {
+            name: {
+                en: "AC target temperature for cooling (°C)",
+                ru: "Целевая температура кондиционера при охлаждении (°C)"
+            },
+            desc: {
+                ru: "Какую целевую температуру выставлять кондиционеру, когда требуется охлаждение. Ставьте заметно ниже комфортной (например 17–18°C), чтобы встроенный датчик кондиционера не остановил компрессор раньше времени — за фактическую температуру в комнате отвечают внешний датчик и виртуальный термостат.",
+                en: "Target temperature to set on the AC when cooling is demanded. Set it noticeably lower than comfortable (e.g. 17–18°C) so the AC's internal sensor does not stop the compressor too early — the external sensor and the virtual thermostat are responsible for the actual room temperature."
+            },
+            type: "Double",
+            value: 17,
+            minValue: 16,
+            maxValue: 30,
+            minStep: 0.5
+        },
+        acHeatTemp: {
+            name: {
+                en: "AC target temperature for heating (°C)",
+                ru: "Целевая температура кондиционера при нагреве (°C)"
+            },
+            desc: {
+                ru: "Какую целевую температуру выставлять кондиционеру, когда требуется нагрев. Ставьте заметно выше комфортной (например 30°C).",
+                en: "Target temperature to set on the AC when heating is demanded. Set it noticeably higher than comfortable (e.g. 30°C)."
+            },
+            type: "Double",
+            value: 30,
+            minValue: 16,
+            maxValue: 30,
+            minStep: 0.5
+        },
+        acFanControl: {
+            name: {
+                en: "Control AC fan speed",
+                ru: "Управлять скоростью вентилятора кондиционера"
+            },
+            desc: {
+                ru: "Если включено и у кондиционера есть характеристика Скорость вентилятора (C_FanSpeed), сценарий выставляет её по разнице температур между текущей и целевой (см. 'Разница температур для вентилятора'). Ручное изменение скорости фиксируется (если включена 'Ручная фиксация скорости вентилятора'), возврат в авто — установкой скорости 0 (Авто).",
+                en: "If enabled and the AC exposes the Fan Speed characteristic (C_FanSpeed), the scenario sets it based on the difference between current and target temperature (see 'Temperature difference for fan'). Manual speed changes are locked (if 'Manual fan speed lock' is enabled); set speed to 0 (Auto) to resume automatic control."
+            },
+            type: "Boolean",
+            value: true
         },
         thermostatLogic: {
             name: {
@@ -215,6 +281,18 @@ info = {
         relaySubscribe: undefined,
         relaySubscribed: false,
         fanSpeedManuallySet: false,
+        acFanSpeedManuallySet: false,
+        acLastSetFanSpeed: undefined,
+        // Последние значения, установленные сценарием на кондиционер.
+        // Нужны, чтобы отличать эхо собственных команд от ручного вмешательства.
+        acLastSetState: undefined,
+        acLastSetTemp: undefined,
+        // Ручное вмешательство: кондиционер изменили не из сценария.
+        // Виртуальный термостат выключается и не трогает кондиционер,
+        // пока пользователь снова не включит термостат.
+        acManualOverride: false,
+        acSubscribe: undefined,
+        acSubscribed: false,
         midnightTask: undefined,
         failureCheckTask: undefined,
         sensorFailed: false,
@@ -239,6 +317,11 @@ function trigger(source, value, variables, options, context) {
                 logError(`Датчик температуры отказал. Режим будет сброшен в Выключен. После восстановления данных режим вернётся к ${value}.`, source)
             }
             variables.lastUserTargetState = value
+            // Пользователь снова включил термостат — возобновляем управление кондиционером
+            if (value !== 0 && variables.acManualOverride) {
+                variables.acManualOverride = false
+                logWarn("Виртуальный термостат включён пользователем — возобновляю управление кондиционером", source)
+            }
         }
 
         if (characteristicType === HC.C_FanSpeed) {
@@ -258,6 +341,8 @@ function trigger(source, value, variables, options, context) {
         subscribeToTemperatureSensor(source, service, variables, options, context)
         // Подписка на реле
         subscribeToRelayState(service, variables, options)
+        // Подписка на ручные изменения кондиционера
+        subscribeToAcState(service, variables, options)
         // Проверка отказа датчика
         startFailureCheckCron(service, variables, options)
 
@@ -295,13 +380,14 @@ function handleHeatingCoolingLogic(source, options, variables) {
     // При отказе датчика управление реле берёт на себя applyFailureBehavior
     if (variables && variables.sensorFailed) {
         logDebug("Управление реле в режиме 'отказ датчика'", source, options.debug)
-        applyFailureBehavior(source.getService(), options, source)
+        applyFailureBehavior(source.getService(), options, source, variables)
         return
     }
 
     const service = source.getService()
     const heatingRelay = getDevice(options, "heatingRelay")
     const coolingRelay = getDevice(options, "coolingRelay")
+    const acThermostat = getAcThermostat(service, options)
 
     const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const targetStateChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
@@ -310,28 +396,103 @@ function handleHeatingCoolingLogic(source, options, variables) {
 
     // Выключено / Вентилятор / Осушитель — оба реле выкл
     if (targetState == 0 || targetState == -1 || targetState == -2) {
-        logDebug(`Целевой режим ${targetState} (Off/Fan/Dry) — отключаем оба реле`, source, options.debug)
+        logDebug(`Целевой режим ${targetState} (Off/Fan/Dry) — отключаем оба реле и кондиционер`, source, options.debug)
         setRelayValue(heatingRelay, false, source, options.debug)
         setRelayValue(coolingRelay, false, source, options.debug)
+        setAcMode(acThermostat, 0, null, source, options, variables)
         return
     }
     // Дальше решает CurrentHeatingCoolingState (значения 0/1/2)
     if (currentState == 1) {
-        logDebug(`Текущий режим = Нагрев → реле нагрева ON, охлаждения OFF`, source, options.debug)
+        logDebug(`Текущий режим = Нагрев → реле нагрева ON, охлаждения OFF, кондиционер → Нагрев`, source, options.debug)
         setRelayValue(heatingRelay, true, source, options.debug)
         setRelayValue(coolingRelay, false, source, options.debug)
+        setAcMode(acThermostat, 1, getAcHeatTemp(options), source, options, variables)
         return
     }
     if (currentState == 2) {
-        logDebug(`Текущий режим = Охлаждение → реле охлаждения ON, нагрева OFF`, source, options.debug)
+        logDebug(`Текущий режим = Охлаждение → реле охлаждения ON, нагрева OFF, кондиционер → Охлаждение`, source, options.debug)
         setRelayValue(heatingRelay, false, source, options.debug)
         setRelayValue(coolingRelay, true, source, options.debug)
+        setAcMode(acThermostat, 2, getAcCoolTemp(options), source, options, variables)
         return
     }
     // currentState == 0
-    logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF`, source, options.debug)
+    logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер OFF`, source, options.debug)
     setRelayValue(heatingRelay, false, source, options.debug)
     setRelayValue(coolingRelay, false, source, options.debug)
+    setAcMode(acThermostat, 0, null, source, options, variables)
+}
+
+// Возвращает сервис Термостат кондиционера из опций.
+// Защита от выбора самого виртуального термостата (это привело бы к зацикливанию).
+function getAcThermostat(service, options) {
+    const ac = getDevice(options, "acThermostat")
+    if (!ac) return undefined
+    if (service && ac.getUUID() == service.getUUID()) {
+        logError("В качестве кондиционера выбран сам виртуальный термостат — опция игнорируется. Выберите сервис Термостат кондиционера.", undefined)
+        return undefined
+    }
+    return ac
+}
+
+function getAcCoolTemp(options) {
+    return options.acCoolTemp != null ? options.acCoolTemp : 17
+}
+
+function getAcHeatTemp(options) {
+    return options.acHeatTemp != null ? options.acHeatTemp : 30
+}
+
+// Устанавливает кондиционеру целевой режим (0 — выкл, 1 — нагрев, 2 — охлаждение)
+// и целевую температуру (при state != 0). Значения пишутся только при отличии,
+// чтобы не спамить команды на устройство.
+// При ручном вмешательстве (acManualOverride) кондиционер не трогаем.
+function setAcMode(ac, state, temp, source, options, variables) {
+    if (!ac) return
+    if (variables && variables.acManualOverride) {
+        logDebug(`Кондиционер под ручным управлением (acManualOverride) — команды не отправляем`, source, options.debug)
+        return
+    }
+    try {
+        const acAccessory = ac.getAccessory()
+        const onlineChar = acAccessory.getService(HS.AccessoryInformation).getCharacteristic(HC.C_Online)
+        if (onlineChar && onlineChar.getValue() != true) {
+            logError(`Кондиционер ${getDeviceName(ac)} не в сети`, source)
+        }
+
+        const targetStateChar = ac.getCharacteristic(HC.TargetHeatingCoolingState)
+        if (!targetStateChar) {
+            logError(`У кондиционера ${getDeviceName(ac)} нет характеристики Целевой режим`, source)
+            return
+        }
+
+        if (state != 0 && temp != null) {
+            const targetTempChar = ac.getCharacteristic(HC.TargetTemperature)
+            if (targetTempChar) {
+                let value = temp
+                const minValue = targetTempChar.getMinValue()
+                const maxValue = targetTempChar.getMaxValue()
+                if (minValue != null && value < minValue) value = minValue
+                if (maxValue != null && value > maxValue) value = maxValue
+                // Запоминаем ДО setValue, чтобы подписка отличила эхо от ручного изменения
+                if (variables) variables.acLastSetTemp = value
+                if (targetTempChar.getValue() !== value) {
+                    targetTempChar.setValue(value)
+                    logDebug(`Кондиционер ${getDeviceName(ac)}: целевая температура → ${value}°C`, source, options.debug)
+                }
+            }
+        }
+
+        const prevState = targetStateChar.getValue()
+        if (variables) variables.acLastSetState = state
+        if (prevState !== state) {
+            targetStateChar.setValue(state)
+            logDebug(`Кондиционер ${getDeviceName(ac)}: целевой режим ${prevState} → ${state}`, source, options.debug)
+        }
+    } catch (e) {
+        logError(`Ошибка при управлении кондиционером ${getDeviceName(ac)}: ${e.toString()}`, source)
+    }
 }
 
 // Вычисляет CurrentHeatingCoolingState (0/1/2) по целевому режиму и температурам с гистерезисом.
@@ -467,29 +628,78 @@ function subscribeToTemperatureSensor(source, service, variables, options, conte
 function subscribeToRelayState(service, variables, options) {
     const heatingRelay = getDevice(options, "heatingRelay")
     const coolingRelay = getDevice(options, "coolingRelay")
+    const acThermostat = getAcThermostat(service, options)
 
     // Используем любую характеристику термостата для создания source в callback
     const thermostatSource = service.getCharacteristic(HC.CurrentHeatingCoolingState)
 
-    // Создаем одну подписку на онлайн статус для обоих реле
-    if ((heatingRelay || coolingRelay) && (!variables.relaySubscribe || variables.relaySubscribed != true) && thermostatSource) {
+    // Создаем одну подписку на онлайн статус для обоих реле и кондиционера
+    if ((heatingRelay || coolingRelay || acThermostat) && (!variables.relaySubscribe || variables.relaySubscribed != true) && thermostatSource) {
         const heatingRelayAccessoryId = getAccessoryIdFromUUID(options.heatingRelay)
         const coolingRelayAccessoryId = getAccessoryIdFromUUID(options.coolingRelay)
-        logDebug(`Создаём подписку на онлайн-статус реле (heat=${heatingRelayAccessoryId}, cool=${coolingRelayAccessoryId})`, thermostatSource, options.debug)
+        const acAccessoryId = getAccessoryIdFromUUID(options.acThermostat)
+        logDebug(`Создаём подписку на онлайн-статус исполнительных устройств (heat=${heatingRelayAccessoryId}, cool=${coolingRelayAccessoryId}, ac=${acAccessoryId})`, thermostatSource, options.debug)
 
         let subscribe = Hub.subscribeWithCondition("", "", [HS.AccessoryInformation], [HC.C_Online], function (onlineSource, onlineValue) {
             if (onlineValue != true) return
 
-            // Получаем идентификатор аксессуара и сравниваем с нашими реле
+            // Получаем идентификатор аксессуара и сравниваем с нашими устройствами
             const accessoryId = getAccessoryIdFromUUID(onlineSource.getUUID())
-            if (accessoryId == heatingRelayAccessoryId || accessoryId == coolingRelayAccessoryId) {
-                logDebug(`Реле ${accessoryId} вернулось в сеть — пересчитываем состояние`, thermostatSource, options.debug)
+            if (accessoryId == heatingRelayAccessoryId || accessoryId == coolingRelayAccessoryId || accessoryId == acAccessoryId) {
+                logDebug(`Устройство ${accessoryId} вернулось в сеть — пересчитываем состояние`, thermostatSource, options.debug)
                 handleHeatingCoolingLogic(thermostatSource, options, variables)
             }
         })
         variables.relaySubscribe = subscribe
         variables.relaySubscribed = true
     }
+}
+
+// Подписка на изменения кондиционера НЕ из сценария (пульт, приложение, интерфейс хаба).
+// Если целевой режим или целевая температура кондиционера изменились и это не эхо
+// собственной команды сценария — виртуальный термостат выключается (TargetHCState=0),
+// ставится флаг acManualOverride и сценарий перестаёт трогать кондиционер,
+// пока пользователь снова не включит виртуальный термостат.
+function subscribeToAcState(service, variables, options) {
+    const acThermostat = getAcThermostat(service, options)
+    if (!acThermostat) return
+    if (variables.acSubscribe && variables.acSubscribed == true) return
+
+    const thermostatSource = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    logDebug(`Создаём подписку на ручные изменения кондиционера (UUID ${options.acThermostat})`, thermostatSource, options.debug)
+
+    let subscribe = Hub.subscribeWithCondition("", "", [HS.Thermostat], [HC.TargetHeatingCoolingState, HC.TargetTemperature], function (acSource, acValue) {
+        try {
+            const acService = acSource.getService()
+            if (acService.getUUID() != options.acThermostat) return
+
+            const type = acSource.getType()
+            // Эхо собственных команд сценария — игнорируем
+            if (type === HC.TargetHeatingCoolingState && acValue === variables.acLastSetState) return
+            if (type === HC.TargetTemperature && variables.acLastSetTemp != null && Math.abs(acValue - variables.acLastSetTemp) < 0.05) return
+            // Кондиционер выключен сценарием: изменение уставки неважно (некоторые
+            // интеграции сами обновляют её при выключении). Ручное ВКЛЮЧЕНИЕ придёт
+            // отдельным событием смены целевого режима и будет обработано.
+            if (type === HC.TargetTemperature && variables.acLastSetState === 0) return
+
+            // Если уже в ручном режиме — ничего не делаем
+            if (variables.acManualOverride) return
+
+            const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+            const virtualTarget = targetChar ? targetChar.getValue() : 0
+            // Термостат выключен — пользователь свободно управляет кондиционером
+            if (virtualTarget == 0) return
+
+            variables.acManualOverride = true
+            const what = type === HC.TargetTemperature ? `целевая температура → ${acValue}°C` : `целевой режим → ${acValue}`
+            logWarn(`Кондиционер изменён вручную (${what}) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат снова.`, thermostatSource)
+            targetChar.setValue(0)
+        } catch (e) {
+            logError("Ошибка обработки ручного изменения кондиционера: " + e.toString())
+        }
+    })
+    variables.acSubscribe = subscribe
+    variables.acSubscribed = true
 }
 
 function setRelayValue(relay, value, source, debug) {
@@ -512,10 +722,42 @@ function setRelayValue(relay, value, source, debug) {
 }
 
 function updateFanSpeed(service, variables, options) {
+    updateVirtualFanSpeed(service, variables, options)
+    updateAcFanSpeed(service, variables, options)
+}
+
+// Вычисляет скорость вентилятора (1..5) по разнице текущей и целевой температур.
+// 0 до step - скорость 1, step до 2*step - 2, 2*step до 3*step - 3, и т.д.
+// Возвращает null, если температуры неизвестны.
+function computeFanSpeedByDiff(service, options) {
+    const currentTempChar = service.getCharacteristic(HC.CurrentTemperature)
+    const targetTempChar = service.getCharacteristic(HC.TargetTemperature)
+    const currentTemp = currentTempChar ? currentTempChar.getValue() : null
+    const targetTemp = targetTempChar ? targetTempChar.getValue() : null
+    if (currentTemp == null || targetTemp == null) {
+        return null
+    }
+    const fanTempStep = options.fanTempStep || 0.5
+    const diff = Math.abs(currentTemp - targetTemp)
+
+    let speed = 1
+    if (diff >= 4 * fanTempStep) {
+        speed = 5
+    } else if (diff >= 3 * fanTempStep) {
+        speed = 4
+    } else if (diff >= 2 * fanTempStep) {
+        speed = 3
+    } else if (diff >= fanTempStep) {
+        speed = 2
+    }
+    return { speed: speed, diff: diff, step: fanTempStep }
+}
+
+function updateVirtualFanSpeed(service, variables, options) {
     try {
         const fanSpeedChar = service.getCharacteristic(HC.C_FanSpeed)
         if (!fanSpeedChar) {
-            // Termостат не поддерживает C_FanSpeed — debug пропускаем (это норма)
+            // Термостат не поддерживает C_FanSpeed — debug пропускаем (это норма)
             return
         }
 
@@ -540,31 +782,14 @@ function updateFanSpeed(service, variables, options) {
             return
         }
 
-        const currentTemp = service.getCharacteristic(HC.CurrentTemperature).getValue()
-        const targetTemp = service.getCharacteristic(HC.TargetTemperature).getValue()
-        const fanTempStep = options.fanTempStep || 0.5
-
-        if (currentTemp == null || targetTemp == null) {
-            logDebug(`Скорость вентилятора: temp/target = ${currentTemp}/${targetTemp} (null) — пропуск`, fanSpeedChar, options.debug)
+        const computed = computeFanSpeedByDiff(service, options)
+        if (computed == null) {
+            logDebug(`Скорость вентилятора: текущая/целевая температура неизвестна — пропуск`, fanSpeedChar, options.debug)
             return
         }
 
-        const diff = Math.abs(currentTemp - targetTemp)
-
-        // Вычисляем скорость вентилятора на основе разницы температур
-        // 0 до step - скорость 1, step до 2*step - 2, 2*step до 3*step - 3, и т.д.
-        let speed = 1
-        if (diff >= 4 * fanTempStep) {
-            speed = 5
-        } else if (diff >= 3 * fanTempStep) {
-            speed = 4
-        } else if (diff >= 2 * fanTempStep) {
-            speed = 3
-        } else if (diff >= fanTempStep) {
-            speed = 2
-        }
-
         // Ограничиваем скорость максимальным значением
+        let speed = computed.speed
         if (speed > maxSpeed) {
             speed = maxSpeed
         }
@@ -572,12 +797,76 @@ function updateFanSpeed(service, variables, options) {
         const currentSpeed = fanSpeedChar.getValue()
         if (currentSpeed != speed) {
             fanSpeedChar.setValue(speed)
-            logDebug(`Скорость вентилятора: ${currentSpeed} → ${speed} (разница ${diff.toFixed(2)}°C, шаг ${fanTempStep})`, fanSpeedChar, options.debug)
+            logDebug(`Скорость вентилятора: ${currentSpeed} → ${speed} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, fanSpeedChar, options.debug)
         } else {
-            logDebug(`Скорость вентилятора остаётся ${speed} (разница ${diff.toFixed(2)}°C, шаг ${fanTempStep})`, fanSpeedChar, options.debug)
+            logDebug(`Скорость вентилятора остаётся ${speed} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, fanSpeedChar, options.debug)
         }
     } catch (e) {
         logError("Ошибка обновления скорости вентилятора: " + e.toString())
+    }
+}
+
+// Управление скоростью вентилятора кондиционера по разнице температур
+// виртуального термостата. Работает, только если включена опция acFanControl
+// и у кондиционера есть характеристика C_FanSpeed.
+// Ручная фиксация: если текущее значение отличается от последнего установленного
+// сценарием — считаем, что скорость изменил пользователь (пультом или из интерфейса),
+// и не трогаем её (при включённой опции fanSpeedManualLock). Возврат в авто — установкой 0 (Авто).
+function updateAcFanSpeed(service, variables, options) {
+    try {
+        if (options.acFanControl != true) return
+        if (variables.acManualOverride) return
+        const ac = getAcThermostat(service, options)
+        if (!ac) return
+        const acFanChar = ac.getCharacteristic(HC.C_FanSpeed)
+        if (!acFanChar) return
+
+        const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
+        const currentState = currentStateChar ? currentStateChar.getValue() : 0
+        if (currentState == 0) {
+            // Кондиционер выключен — вентилятор не трогаем
+            return
+        }
+
+        const acCurrentSpeed = acFanChar.getValue()
+
+        // Пользователь вернул Авто (0) — снимаем фиксацию
+        if (acCurrentSpeed === 0 && acFanChar.getMinValue() === 0) {
+            if (variables.acFanSpeedManuallySet) {
+                logDebug(`Вентилятор кондиционера: пользователь поставил Авто (0) — снимаем фиксацию`, acFanChar, options.debug)
+                variables.acFanSpeedManuallySet = false
+            }
+        } else if (variables.acLastSetFanSpeed != null && acCurrentSpeed !== variables.acLastSetFanSpeed) {
+            // Значение изменилось не сценарием — ручное вмешательство
+            if (options.fanSpeedManualLock == true && !variables.acFanSpeedManuallySet) {
+                logDebug(`Вентилятор кондиционера: скорость ${acCurrentSpeed} установлена вручную — фиксируем`, acFanChar, options.debug)
+                variables.acFanSpeedManuallySet = true
+            }
+        }
+
+        if (variables.acFanSpeedManuallySet) {
+            logDebug(`Вентилятор кондиционера зафиксирован пользователем — пропуск. Поставьте Авто (0), чтобы вернуть автоматический режим.`, acFanChar, options.debug)
+            return
+        }
+
+        const computed = computeFanSpeedByDiff(service, options)
+        if (computed == null) {
+            return
+        }
+
+        let speed = computed.speed
+        const maxSpeed = acFanChar.getMaxValue()
+        const minSpeed = acFanChar.getMinValue()
+        if (maxSpeed != null && speed > maxSpeed) speed = maxSpeed
+        if (minSpeed != null && speed < minSpeed) speed = minSpeed
+
+        if (acCurrentSpeed !== speed) {
+            acFanChar.setValue(speed)
+            logDebug(`Вентилятор кондиционера: ${acCurrentSpeed} → ${speed} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, acFanChar, options.debug)
+        }
+        variables.acLastSetFanSpeed = speed
+    } catch (e) {
+        logError("Ошибка обновления скорости вентилятора кондиционера: " + e.toString())
     }
 }
 
@@ -638,7 +927,7 @@ function getFailureTimeoutMinutes(options) {
 // 1 — Нагрев: оставить TargetHCState как есть, реле нагрева ON, реле охлаждения OFF.
 // 2 — Охлаждение: оставить TargetHCState как есть, реле нагрева OFF, реле охлаждения ON.
 // 3 — Ничего не делать: ни реле, ни режим не трогаем.
-function applyFailureBehavior(service, options, source) {
+function applyFailureBehavior(service, options, source, variables) {
     const behavior = options.failureBehavior
     if (behavior == 3) {
         logDebug("Отказ датчика: режим 'Ничего не делать' — состояние не меняем", source, options.debug)
@@ -647,29 +936,33 @@ function applyFailureBehavior(service, options, source) {
 
     const heatingRelay = getDevice(options, "heatingRelay")
     const coolingRelay = getDevice(options, "coolingRelay")
+    const acThermostat = getAcThermostat(service, options)
 
     if (behavior == 1) {
-        logDebug("Отказ датчика: режим 'Нагрев' — реле нагрева ON, охлаждения OFF (целевой режим не меняем)", source, options.debug)
+        logDebug("Отказ датчика: режим 'Нагрев' — реле нагрева ON, охлаждения OFF, кондиционер → Нагрев (целевой режим не меняем)", source, options.debug)
         setRelayValue(heatingRelay, true, source, options.debug)
         setRelayValue(coolingRelay, false, source, options.debug)
+        setAcMode(acThermostat, 1, getAcHeatTemp(options), source, options, variables)
         return
     }
 
     if (behavior == 2) {
-        logDebug("Отказ датчика: режим 'Охлаждение' — реле охлаждения ON, нагрева OFF (целевой режим не меняем)", source, options.debug)
+        logDebug("Отказ датчика: режим 'Охлаждение' — реле охлаждения ON, нагрева OFF, кондиционер → Охлаждение (целевой режим не меняем)", source, options.debug)
         setRelayValue(heatingRelay, false, source, options.debug)
         setRelayValue(coolingRelay, true, source, options.debug)
+        setAcMode(acThermostat, 2, getAcCoolTemp(options), source, options, variables)
         return
     }
 
-    // 0 — Отключить: целевой режим в OFF + оба реле OFF
-    logDebug("Отказ датчика: режим 'Отключить' — TargetHCState=0, оба реле OFF", source, options.debug)
+    // 0 — Отключить: целевой режим в OFF + оба реле OFF + кондиционер OFF
+    logDebug("Отказ датчика: режим 'Отключить' — TargetHCState=0, оба реле OFF, кондиционер OFF", source, options.debug)
     const targetChar = service ? service.getCharacteristic(HC.TargetHeatingCoolingState) : null
     if (targetChar && targetChar.getValue() !== 0) {
         targetChar.setValue(0)
     }
     setRelayValue(heatingRelay, false, source, options.debug)
     setRelayValue(coolingRelay, false, source, options.debug)
+    setAcMode(acThermostat, 0, null, source, options, variables)
 }
 
 // Восстановление после отказа датчика.
@@ -724,7 +1017,7 @@ function checkSensorFailure(service, variables, options) {
             const behaviorText = describeFailureBehavior(options.failureBehavior)
             logError(`Нет показаний от датчика температуры (${sensorName}) уже ${elapsedMin} мин. Отказ датчика: ${behaviorText}`, sensorChar)
         }
-        applyFailureBehavior(service, options, sensorChar)
+        applyFailureBehavior(service, options, sensorChar, variables)
     } catch (e) {
         logError("Ошибка проверки отказа датчика: " + e.toString())
     }
