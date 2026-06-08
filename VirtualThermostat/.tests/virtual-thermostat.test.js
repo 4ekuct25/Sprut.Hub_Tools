@@ -1090,7 +1090,7 @@ describe('README §"Cron-проверка отказа датчика"', () => {
 describe('README §"failureBehavior=Отключить"', () => {
   it('lastUpdateTime > failureTimeout → TargetHCState=0, оба реле OFF, sensorFailed=true', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 20, targetTemp: 22 });
-    const sensor = makeTempSensor(hub, 30, 20);
+    const sensor = makeTempSensor(hub, 30, 20, false)
     const heat = makeRelay(hub, 20, 'Нагрев', true);
     const cool = makeRelay(hub, 21, 'Охлаждение', true);
     const source = t.char(HS.Thermostat, HC.CurrentHeatingCoolingState);
@@ -1123,7 +1123,7 @@ describe('README §"failureBehavior=Отключить"', () => {
 
   it('cron tick → пишет error в лог про отказ датчика (Отключить)', ({ hub, scenario, time, logs }) => {
     const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 20, targetTemp: 22 });
-    const sensor = makeTempSensor(hub, 30, 20);
+    const sensor = makeTempSensor(hub, 30, 20, false)
     const heat = makeRelay(hub, 20, 'Нагрев', true);
     const source = t.char(HS.Thermostat, HC.CurrentHeatingCoolingState);
     const vars = freshVars();
@@ -1156,7 +1156,7 @@ describe('README §"failureBehavior=Отключить"', () => {
 describe('README §"failureBehavior=Нагрев"', () => {
   it('реле нагрева ON, охлаждения OFF, TargetHCState НЕ меняется', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 22, targetTemp: 22 });
-    const sensor = makeTempSensor(hub, 30, 22);
+    const sensor = makeTempSensor(hub, 30, 22, false)
     const heat = makeRelay(hub, 20, 'Нагрев', false);
     const cool = makeRelay(hub, 21, 'Охлаждение', true);
     const source = t.char(HS.Thermostat, HC.CurrentHeatingCoolingState);
@@ -1192,7 +1192,7 @@ describe('README §"failureBehavior=Нагрев"', () => {
 describe('README §"failureBehavior=Охлаждение"', () => {
   it('реле охлаждения ON, нагрева OFF, TargetHCState НЕ меняется', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 0, 1, { currentTemp: 22, targetTemp: 22 });
-    const sensor = makeTempSensor(hub, 30, 22);
+    const sensor = makeTempSensor(hub, 30, 22, false)
     const heat = makeRelay(hub, 20, 'Нагрев', true);
     const cool = makeRelay(hub, 21, 'Охлаждение', false);
     const source = t.char(HS.Thermostat, HC.CurrentHeatingCoolingState);
@@ -1229,7 +1229,7 @@ describe('README §"failureBehavior=Охлаждение"', () => {
 describe('README §"failureBehavior=Ничего не делать"', () => {
   it('TargetHCState, реле — все остаются как были', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 20, targetTemp: 22 });
-    const sensor = makeTempSensor(hub, 30, 20);
+    const sensor = makeTempSensor(hub, 30, 20, false)
     const heat = makeRelay(hub, 20, 'Нагрев', true);
     const cool = makeRelay(hub, 21, 'Охлаждение', false);
     const source = t.char(HS.Thermostat, HC.CurrentHeatingCoolingState);
@@ -1545,7 +1545,7 @@ describe('README §"Авто-восстановление через callback п
 describe('README §"Лог-ошибка при обнаружении отказа"', () => {
   it('cron tick + failureBehavior=Нагрев → error в логе про отказ', ({ hub, scenario, time, logs }) => {
     const t = makeThermostat(hub, 10, 0, 1, { currentTemp: 20, targetTemp: 22 });
-    const sensor = makeTempSensor(hub, 30, 20);
+    const sensor = makeTempSensor(hub, 30, 20, false)
     const heat = makeRelay(hub, 20, 'Нагрев', false);
     const source = t.char(HS.Thermostat, HC.CurrentHeatingCoolingState);
     const vars = freshVars();

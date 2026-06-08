@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.6.0-ac",
+    version: "3.6.1-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1461,6 +1461,22 @@ function recoverFromSensorFailure(service, variables, options, source) {
 }
 
 // Проверка состояния датчика. Срабатывает по cron каждые 15 минут.
+// Онлайн-статус аксессуара датчика температуры (характеристика C_Online).
+// null — определить нельзя (тогда считаем как «неизвестно», не онлайн).
+function isSensorOnline(options) {
+    try {
+        const sensorService = getDevice(options, "sensor")
+        if (!sensorService) return false
+        const info = sensorService.getAccessory().getService(HS.AccessoryInformation)
+        if (!info) return false
+        const onlineChar = info.getCharacteristic(HC.C_Online)
+        if (!onlineChar) return false
+        return onlineChar.getValue() == true
+    } catch (e) {
+        return false
+    }
+}
+
 function checkSensorFailure(service, variables, options) {
     try {
         if (!options.sensor || options.sensor === '') return
@@ -1478,6 +1494,17 @@ function checkSensorFailure(service, variables, options) {
         const timeoutMin = Math.round(timeoutMs / 60000)
         logDebug(`Проверка датчика: с последнего обновления ${elapsedMin} мин (timeout ${timeoutMin} мин)`, sensorChar, options.debug)
         if (elapsed <= timeoutMs) {
+            recoverFromSensorFailure(service, variables, options, sensorChar)
+            return
+        }
+        // Тишина при стабильной температуре — норма для Zigbee-датчиков, которые
+        // шлют данные только при изменении (eWeLink SNZB-02D и подобные). Пока
+        // аксессуар датчика в сети, отказом это не считаем — обновляем отметку
+        // времени и продолжаем работу. Реальный отказ (сел аккумулятор, выдернули)
+        // проявляется уходом в офлайн.
+        if (isSensorOnline(options)) {
+            logDebug(`Датчик молчит ${elapsedMin} мин, но он в сети — считаем живым (датчик шлёт данные только при изменении)`, sensorChar, options.debug)
+            variables.lastUpdateTime = Date.now()
             recoverFromSensorFailure(service, variables, options, sensorChar)
             return
         }

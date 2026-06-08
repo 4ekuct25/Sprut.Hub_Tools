@@ -1110,6 +1110,50 @@ describe('AC §"Окно времени вентилятора без компр
   });
 });
 
+describe('AC §"Отказ датчика: тихий онлайн-датчик не считается отказом"', () => {
+  function uuidSensor(sensor) { return sensor.getService(HS.TemperatureSensor).getUUID(); }
+
+  it('датчик молчит дольше таймаута, но онлайн → НЕ отказ, lastUpdateTime обновляется', ({ hub, scenario, time }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24, targetTemp: 24 });
+    const sensor = makeTempSensor(hub, 30, 24, true); // онлайн
+    const vars = freshVars();
+    vars.lastUpdateTime = time.now() - 90 * 60000; // 90 минут тишины
+    const options = baseOptions({ sensor: uuidSensor(sensor), failureTimeout: 60 });
+
+    scenario.call('checkSensorFailure', [t.char(HS.Thermostat, HC.CurrentTemperature).getService(), vars, options]);
+
+    expect(vars.sensorFailed).toBe(false);
+    // отметка времени подвинулась к настоящему — следующий тик не сработает
+    expect(time.now() - vars.lastUpdateTime).toBeLessThan(5000);
+  });
+
+  it('датчик молчит дольше таймаута И офлайн → настоящий отказ', ({ hub, scenario, time, logs }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24, targetTemp: 24 });
+    const sensor = makeTempSensor(hub, 30, 24, false); // офлайн
+    const vars = freshVars();
+    vars.lastUpdateTime = time.now() - 90 * 60000;
+    const options = baseOptions({ sensor: uuidSensor(sensor), failureTimeout: 60, failureBehavior: 0 });
+
+    scenario.call('checkSensorFailure', [t.char(HS.Thermostat, HC.CurrentTemperature).getService(), vars, options]);
+
+    expect(vars.sensorFailed).toBe(true);
+    const errors = logs.byLevel('error');
+    expect(errors.some((e) => e.message.indexOf('Нет показаний от датчика') >= 0)).toBe(true);
+  });
+
+  it('в пределах таймаута → штатно, отказа нет', ({ hub, scenario, time }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24, targetTemp: 24 });
+    const sensor = makeTempSensor(hub, 30, 24, true);
+    const vars = freshVars();
+    vars.lastUpdateTime = time.now() - 10 * 60000; // 10 минут
+    const options = baseOptions({ sensor: uuidSensor(sensor), failureTimeout: 60 });
+
+    scenario.call('checkSensorFailure', [t.char(HS.Thermostat, HC.CurrentTemperature).getService(), vars, options]);
+
+    expect(vars.sensorFailed).toBe(false);
+  });
+});
+
 describe('AC §"Эмуляция термостата + кондиционер"', () => {
   it('emulateThermostat: жарко (27 > 24+0.5) → currentState=2 и кондиционер включается', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 27, targetTemp: 24 });
