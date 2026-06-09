@@ -913,6 +913,37 @@ describe('AC §"Плавная целевая температура (acSmoothTa
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(26);
   });
 
+  it('сила плавного режима K=2 удваивает отставание: 28 - 2*(27-24)=22', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 2 }), vars, 2);
+
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(22);
+  });
+
+  it('сила K=3 при нагреве: 22 + 3*(24-20)=34 → кламп к максимуму устройства (38 не превышен, но проверим >own)', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 20, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 22 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 3 }), vars, 1);
+
+    // 22 + 3*4 = 34, в пределах диапазона TargetTemperature (10..38)
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(34);
+  });
+
+  it('сила по умолчанию (нет опции) = 1.0 → прежнее поведение', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 2);
+
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+  });
+
   it('значение округляется до целого (шаг кондиционера 1°)', ({ hub, scenario }) => {
     // 27.6 - (27.3-24) = 24.3 → 24
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27.3, targetTemp: 24 });

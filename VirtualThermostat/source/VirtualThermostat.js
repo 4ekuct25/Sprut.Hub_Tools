@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.6.1-ac",
+    version: "3.7.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -150,6 +150,21 @@ info = {
             },
             type: "Boolean",
             value: false
+        },
+        acSmoothFactor: {
+            name: {
+                en: "Smooth mode strength",
+                ru: "Сила плавного режима"
+            },
+            desc: {
+                ru: "Множитель для опции «Плавная целевая температура». Насколько резко кондиционер набирает холод (или тепло): целевая температура кондиционера = его собственная температура плюс умноженное на этот коэффициент отставание комнаты от цели. 1.0 — мягко (по умолчанию), 2.0 — заметно бодрее, 3.0+ — близко к форсажу. Помогает, когда в жару комната уходит выше цели, потому что плавный режим охлаждает слишком деликатно. Перелёт ниже цели невозможен при любом значении — охлаждение всё равно выключается по гистерезису. Работает только при включённой «Плавной целевой температуре»; на режим «вентилятор без компрессора» не влияет.",
+                en: "Multiplier for the 'Smooth AC target temperature' option. How aggressively the AC pulls toward the goal: AC target = its own temperature plus the room-to-goal gap multiplied by this factor. 1.0 — gentle (default), 2.0 — noticeably stronger, 3.0+ — close to full blast. Helps when on hot days the room drifts above the goal because smooth mode cools too gently. Cannot overshoot below the goal at any value — cooling still stops by hysteresis. Active only when 'Smooth AC target temperature' is on; does not affect fan-without-compressor mode."
+            },
+            type: "Double",
+            value: 1.0,
+            minValue: 1.0,
+            maxValue: 5.0,
+            minStep: 0.5
         },
         acFanOnlyAtTarget: {
             name: {
@@ -887,10 +902,12 @@ function computeSmoothAcTemp(ac, state, service, options) {
     const ext = toNum(getCharValue(service, HC.CurrentTemperature))
     const goal = toNum(getCharValue(service, HC.TargetTemperature))
     if (acInternal == null || ext == null || goal == null) return null
-    // Требуем от кондиционера сместить его собственное показание ровно на столько,
-    // на сколько комната (по внешнему датчику) отстоит от цели. Работает и для
-    // нагрева, и для охлаждения. Шаг кондиционера — 1°C.
-    return Math.round(acInternal + (goal - ext))
+    // Требуем от кондиционера сместить его собственное показание на отставание
+    // комнаты (по внешнему датчику) от цели, умноженное на «Силу плавного режима».
+    // Работает и для нагрева, и для охлаждения. Шаг кондиционера — 1°C.
+    let factor = toNum(options.acSmoothFactor)
+    if (factor == null || factor < 1) factor = 1
+    return Math.round(acInternal + factor * (goal - ext))
 }
 
 // Целевая температура кондиционера в режиме «вентилятор без компрессора»:
