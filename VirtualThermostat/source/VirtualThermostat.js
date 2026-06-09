@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.7.0-ac",
+    version: "3.7.1-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -907,7 +907,9 @@ function computeSmoothAcTemp(ac, state, service, options) {
     // Работает и для нагрева, и для охлаждения. Шаг кондиционера — 1°C.
     let factor = toNum(options.acSmoothFactor)
     if (factor == null || factor < 1) factor = 1
-    return Math.round(acInternal + factor * (goal - ext))
+    const result = Math.round(acInternal + factor * (goal - ext))
+    logDebug(`Плавная целевая: собств.${acInternal} + сила ${factor}·(цель ${goal} − комната ${ext}) = ${result}°C`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
+    return result
 }
 
 // Целевая температура кондиционера в режиме «вентилятор без компрессора»:
