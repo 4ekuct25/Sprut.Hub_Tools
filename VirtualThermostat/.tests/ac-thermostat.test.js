@@ -1243,16 +1243,23 @@ describe('AC §"Осушитель/Вентилятор — отступлени
     expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(-1);
   });
 
-  it('с выключателем питания: кондей в Осушителе держит питание ON — сценарий НЕ гасит (нет пинг-понга)', ({ hub, scenario }) => {
-    // термостат в простое (цель достигнута), кондей вручную в Осушителе и запитан
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.5, targetTemp: 24 });
-    const ac = makeAc(hub, 20, { targetState: -2, targetTemp: 24, withPower: true, power: true });
+  it('с выключателем питания: после перехода в Осушитель кондей держит питание ON — сценарий НЕ гасит (нет пинг-понга)', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 16, withPower: true, power: true });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac) });
 
-    runTrigger(scenario, t, options, vars, 2);
+    runTrigger(scenario, t, options, vars, 2); // сценарий охлаждает, питание ON
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
 
-    // питание НЕ погашено, ушли в ручной режим
+    expireEchoWindow(vars);
+    // пользователь переводит кондей в Осушитель — событие смены режима → отступаем
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(-2);
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+
+    // кондей в Dry продолжает рапортовать питание ON — сценарий НЕ гасит
+    ac.char(HS.Fan, HC.On).setValue(true);
     expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
     expect(vars.acManualOverride).toBe(true);
   });
@@ -1274,5 +1281,27 @@ describe('AC §"Осушитель/Вентилятор — отступлени
 
     expect(vars.acManualOverride).toBe(false);
     expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+  });
+
+  it('возврат через термостат: кондей ещё в Dry, пользователь включил термостат в Охлаждение → берём управление, не залипаем в отступлении', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24 });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac) });
+
+    runTrigger(scenario, t, options, vars, 2);
+    expireEchoWindow(vars);
+    ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(-2); // пользователь -> Осушитель
+    expect(vars.acManualOverride).toBe(true);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(0);
+
+    // пользователь включает виртуальный термостат в Охлаждение, хотя кондей ещё в Dry
+    t.char(HS.Thermostat, HC.TargetHeatingCoolingState).setValue(2);
+    runTrigger(scenario, t, options, vars, 2);
+
+    // взяли управление: override снят, термостат остался в Охлаждении, кондей выведен из Dry
+    expect(vars.acManualOverride).toBe(false);
+    expect(t.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
+    expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
   });
 });

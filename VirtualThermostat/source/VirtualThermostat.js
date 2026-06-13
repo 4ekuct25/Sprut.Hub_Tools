@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.8.0-ac",
+    version: "3.8.1-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -492,17 +492,20 @@ function handleHeatingCoolingLogic(source, options, variables) {
     const coolingRelay = getDevice(options, "coolingRelay")
     const acThermostat = getAcThermostat(service, options)
 
-    // Кондиционер переведён пользователем в Осушитель/Вентилятор — сценарий эти
-    // режимы не регулирует: отступаем и не трогаем кондиционер (иначе пинг-понг).
-    if (acThermostat && !variables.acManualOverride && acIsDryOrFan(service, options)) {
-        handAcToManualForDryFan(service, variables, source)
-        return
-    }
-
     const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const targetStateChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
     const currentState = currentStateChar ? currentStateChar.getValue() : 0
     const targetState = targetStateChar ? targetStateChar.getValue() : 0
+
+    // Кондиционер в Осушителе/Вентиляторе, а сам термостат при этом в Выкл —
+    // отступаем и не трогаем кондиционер (иначе пинг-понг по питанию).
+    // ВАЖНО: только при targetState==0. Если пользователь явно попросил
+    // Охлаждение/Нагрев/Авто (1/2/3) — сценарий БЕРЁТ управление и выводит
+    // кондиционер из Dry/Fan, иначе включить термостат обратно будет невозможно.
+    if (acThermostat && !variables.acManualOverride && toNum(targetState) == 0 && acIsDryOrFan(service, options)) {
+        handAcToManualForDryFan(service, variables, source)
+        return
+    }
 
     // Выключено / Вентилятор / Осушитель — оба реле выкл
     if (targetState == 0 || targetState == -1 || targetState == -2) {
@@ -1017,9 +1020,11 @@ function subscribeToAcState(service, variables, options) {
 
             const hasPowerSwitch = options.acPowerSwitch != null && options.acPowerSwitch !== ''
 
-            // Осушитель (-2) / Вентилятор (-1): сценарий их не регулирует — отступаем.
-            // Проверяем и пришедшее значение, и текущее состояние кондея.
-            if ((type === HC.TargetHeatingCoolingState && (numValue == -1 || numValue == -2)) || acIsDryOrFan(service, options)) {
+            // Пользователь перевёл кондиционер в Осушитель (-2) / Вентилятор (-1):
+            // сценарий их не регулирует — отступаем. Реагируем именно на СМЕНУ режима
+            // (свежее событие), а не на текущее состояние: иначе на возврате, когда
+            // кондей ещё физически в Dry, любое эхо снова увело бы в ручной режим.
+            if (type === HC.TargetHeatingCoolingState && (numValue == -1 || numValue == -2)) {
                 handAcToManualForDryFan(service, variables, thermostatSource)
                 return
             }
@@ -1158,10 +1163,14 @@ function subscribeToAcPower(service, variables, options) {
 
             logDebug(`AC-питание: ${powerValue} (isOn ${isOn}), lastSetPower=${variables.acLastSetPower}, desiredPower=${desiredPower}, inWindow=${inEchoWindow}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
 
-            // Осушитель/Вентилятор: кондей сам держит питание включённым в режиме,
-            // который сценарий не регулирует. Не реассертим питание и не включаем
-            // термостат — отступаем, иначе будет пинг-понг «вкл/выкл».
-            if (acIsDryOrFan(service, options)) {
+            // Осушитель/Вентилятор при ВЫКЛЮЧЕННОМ термостате: кондей сам держит питание
+            // в режиме, который сценарий не регулирует. Не реассертим и не включаем
+            // термостат — отступаем, иначе пинг-понг «вкл/выкл». Если же термостат
+            // активен (target!=0), значит пользователь хочет охлаждение/нагрев —
+            // сценарий владеет кондеем и выведет его из Dry, тут не вмешиваемся.
+            const vtChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+            const vTarget = vtChar ? toNum(vtChar.getValue()) : 0
+            if (vTarget == 0 && acIsDryOrFan(service, options)) {
                 handAcToManualForDryFan(service, variables, thermostatSource)
                 return
             }
