@@ -5,14 +5,14 @@ let acPowerServicesList = getServicesByCharacteristicTypes([HC.On, HC.Active]);
 
 // Выносим описание в переменную для использования в info и options
 let scenarioDescription = {
-    ru: "Позволяет реализовать логику виртуального термостата, указав датчик температуры и исполнительные устройства: реле нагрева/охлаждения и/или кондиционер (сервис Термостат). Сценарий получает и устанавливает температуру в помещении, включает и отключает реле, а кондиционер переводит в режим Нагрев/Охлаждение с форсированной целевой температурой и выключает его, когда требование снято. Поддерживает целевые режимы: Нагрев, Охлаждение, Автоматический и Выключен. Автоматически управляет скоростью вентилятора (если доступна характеристика C_FanSpeed) на основе разницы между текущей и целевой температурой.",
-    en: "Allows you to implement virtual thermostat logic by specifying a temperature sensor and actuators: heating/cooling relays and/or an air conditioner (Thermostat service). The scenario receives and sets the room temperature, switches relays on and off, and drives the AC to Heat/Cool mode with a forced target temperature, turning it off when the demand is over. Supports target modes: Heating, Cooling, Automatic and Off. Automatically controls fan speed (if the C_FanSpeed characteristic is available) based on the difference between current and target temperature."
+    ru: "Позволяет реализовать логику виртуального термостата, указав датчик температуры и исполнительные устройства: реле нагрева/охлаждения и/или кондиционер (сервис Термостат). Сценарий получает и устанавливает температуру в помещении, включает и отключает реле, а кондиционер переводит в режим Нагрев/Охлаждение с форсированной целевой температурой и выключает его, когда требование снято. Поддерживает целевые режимы: Нагрев, Охлаждение, Автоматический и Выключен. Если кондиционер переключают в Осушитель или Вентилятор — сценарий отступает (отдаёт управление пользователю), так как эти режимы не регулируются по температуре. Автоматически управляет скоростью вентилятора (если доступна характеристика C_FanSpeed) на основе разницы между текущей и целевой температурой.",
+    en: "Allows you to implement virtual thermostat logic by specifying a temperature sensor and actuators: heating/cooling relays and/or an air conditioner (Thermostat service). The scenario receives and sets the room temperature, switches relays on and off, and drives the AC to Heat/Cool mode with a forced target temperature, turning it off when the demand is over. Supports target modes: Heating, Cooling, Automatic and Off. If the AC is switched to Dry or Fan mode, the scenario steps aside (hands control back to the user), since these modes are not temperature-regulated. Automatically controls fan speed (if the C_FanSpeed characteristic is available) based on the difference between current and target temperature."
 };
 
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.7.1-ac",
+    version: "3.8.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -492,6 +492,13 @@ function handleHeatingCoolingLogic(source, options, variables) {
     const coolingRelay = getDevice(options, "coolingRelay")
     const acThermostat = getAcThermostat(service, options)
 
+    // Кондиционер переведён пользователем в Осушитель/Вентилятор — сценарий эти
+    // режимы не регулирует: отступаем и не трогаем кондиционер (иначе пинг-понг).
+    if (acThermostat && !variables.acManualOverride && acIsDryOrFan(service, options)) {
+        handAcToManualForDryFan(service, variables, source)
+        return
+    }
+
     const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const targetStateChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
     const currentState = currentStateChar ? currentStateChar.getValue() : 0
@@ -543,6 +550,32 @@ function getAcThermostat(service, options) {
         return undefined
     }
     return ac
+}
+
+// Кондиционер сейчас в режиме Осушитель (-2) или Вентилятор (-1)?
+// Сценарий сам НИКОГДА не выставляет эти режимы (только 0/1/2/3), поэтому их
+// появление — это всегда выбор пользователя. В таких режимах температура не
+// регулируется, поэтому сценарий должен отступить и не трогать кондиционер.
+function acIsDryOrFan(service, options) {
+    const ac = getAcThermostat(service, options)
+    if (!ac) return false
+    const ch = ac.getCharacteristic(HC.TargetHeatingCoolingState)
+    if (!ch) return false
+    const m = toNum(ch.getValue())
+    return m == -1 || m == -2
+}
+
+// Отдать кондиционер под ручное управление (Осушитель/Вентилятор): включаем
+// acManualOverride, гасим попытки реассерта и переводим виртуальный термостат
+// в Выключен, чтобы сценарий перестал слать команды. Возврат автоматики —
+// штатный: смена режима кондея на Охлаждение/Нагрев или включение термостата.
+function handAcToManualForDryFan(service, variables, source) {
+    if (variables.acManualOverride) return
+    variables.acManualOverride = true
+    variables.acReassertCount = 0
+    logWarn("Кондиционер в режиме Осушитель/Вентилятор — отдаю управление, выключаю виртуальный термостат. Чтобы вернуть автоматику, переключите кондиционер в Охлаждение/Нагрев или включите термостат.", source)
+    const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
+    if (targetChar && toNum(targetChar.getValue()) != 0) targetChar.setValue(0)
 }
 
 function getAcCoolTemp(options) {
@@ -984,6 +1017,13 @@ function subscribeToAcState(service, variables, options) {
 
             const hasPowerSwitch = options.acPowerSwitch != null && options.acPowerSwitch !== ''
 
+            // Осушитель (-2) / Вентилятор (-1): сценарий их не регулирует — отступаем.
+            // Проверяем и пришедшее значение, и текущее состояние кондея.
+            if ((type === HC.TargetHeatingCoolingState && (numValue == -1 || numValue == -2)) || acIsDryOrFan(service, options)) {
+                handAcToManualForDryFan(service, variables, thermostatSource)
+                return
+            }
+
             if (type === HC.TargetHeatingCoolingState) {
                 // При выключателе питания выключенность определяется питанием, а не
                 // режимом термостат-сервиса: устройства вроде VIOMI продолжают
@@ -1117,6 +1157,14 @@ function subscribeToAcPower(service, variables, options) {
             const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
 
             logDebug(`AC-питание: ${powerValue} (isOn ${isOn}), lastSetPower=${variables.acLastSetPower}, desiredPower=${desiredPower}, inWindow=${inEchoWindow}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
+
+            // Осушитель/Вентилятор: кондей сам держит питание включённым в режиме,
+            // который сценарий не регулирует. Не реассертим питание и не включаем
+            // термостат — отступаем, иначе будет пинг-понг «вкл/выкл».
+            if (acIsDryOrFan(service, options)) {
+                handAcToManualForDryFan(service, variables, thermostatSource)
+                return
+            }
 
             // Совпадает с желаемым — эхо/подтверждение
             if (desiredPower != null && isOn === desiredPower) {
