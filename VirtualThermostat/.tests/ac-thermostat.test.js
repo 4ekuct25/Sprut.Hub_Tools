@@ -1026,29 +1026,49 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
   });
 
-  it('окно активно, но комната ниже порога выключения (переохлаждена) → обдува НЕТ, кондиционер выключен полностью', ({ hub, scenario }) => {
-    // цель 24, гистерезис 0.5 → порог выключения 23.5; комната 21.8 (как переохлаждённое утро)
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 21.8, targetTemp: 24 });
-    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 24, withPower: true, power: true });
+  // Гистерезис обдува. Цель 24, гистерезис 0.5 → порог запуска 23.5, порог удержания 23.0.
+  it('ЗАПУСК: кондей выключен, комната ниже коридора (23.2 < 23.5) → обдув НЕ запускается сам', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.2, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 17, currentTemp: 24, withPower: true, power: false });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.5 });
 
     runTrigger(scenario, t, options, vars, 2);
 
-    // вне рабочей зоны по температуре → обдув не включаем, питание выключено
     expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
   });
 
-  it('окно активно, комната в рабочей зоне (>= порога выключения) → обдув включается', ({ hub, scenario }) => {
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.8, targetTemp: 24 });
-    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+  it('ЗАПУСК: кондей выключен, комната достигла коридора (23.6 >= 23.5) → обдув запускается', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.6, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 17, currentTemp: 26, withPower: true, power: false });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.5 });
 
     runTrigger(scenario, t, options, vars, 2);
 
     expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
-    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
+  });
+
+  it('УДЕРЖАНИЕ: кондей работает, проскок ниже коридора (23.2 >= 23.0) → обдув держится', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.2, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 24, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.5 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+  });
+
+  it('УДЕРЖАНИЕ: кондей работает, но глубокое переохлаждение (22.8 < 23.0) → полный выкл', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 22.8, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 24, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.5 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
   });
 
   it('опция выключена → кондиционер выключается полностью (как раньше)', ({ hub, scenario }) => {

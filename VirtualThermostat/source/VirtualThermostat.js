@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.9.0-ac",
+    version: "3.9.1-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -172,8 +172,8 @@ info = {
                 ru: "После достижения цели — вентилятор без компрессора"
             },
             desc: {
-                ru: "Если включено: когда комната достигла цели, кондиционер не выключается — ему ставится целевая температура чуть выше собственной (при охлаждении; при нагреве — чуть ниже), компрессор останавливается, а вентилятор продолжает перемешивать воздух. Обдув работает только когда комната в рабочей зоне (не ниже порога выключения = цель − гистерезис) И внутри интервала по времени; если комната ушла ниже порога (переохлаждена), кондиционер выключается полностью. Если опция выключена — кондиционер полностью выключается (как раньше). При выключении самого виртуального термостата кондиционер всегда выключается полностью.",
-                en: "If enabled: when the room reaches the goal the AC is not turned off — its target temperature is set slightly above its own reading (for cooling; below for heating), the compressor stops and the fan keeps circulating air. Fan-only runs only while the room is in the working zone (not below the off-point = goal − hysteresis) AND within the time interval; if the room drifts below the off-point (overcooled), the AC is turned off completely. If disabled, the AC is turned off completely (as before). When the virtual thermostat itself is turned off, the AC is always turned off completely."
+                ru: "Если включено: когда комната достигла цели, кондиционер не выключается — ему ставится целевая температура чуть выше собственной (при охлаждении; при нагреве — чуть ниже), компрессор останавливается, а вентилятор продолжает перемешивать воздух. Обдув работает только когда комната в рабочей зоне и внутри интервала по времени, с гистерезисом: ЗАПУСКАЕТСЯ по достижению коридора (порог = цель ∓ гистерезис) — сам по времени при переохлаждённой комнате не включается; если кондиционер уже работает, обдув УДЕРЖИВАЕТСЯ ещё на гистерезис ниже порога (проскок охлаждения не выключает кондей), а при более глубоком переохлаждении — полный выкл. Если опция выключена — кондиционер полностью выключается (как раньше). При выключении самого виртуального термостата кондиционер всегда выключается полностью.",
+                en: "If enabled: when the room reaches the goal the AC is not turned off — its target temperature is set slightly above its own reading (for cooling; below for heating), the compressor stops and the fan keeps circulating air. Fan-only runs only while the room is in the working zone and within the time interval, with hysteresis: it STARTS on reaching the corridor (threshold = goal ∓ hysteresis) — so it does not switch on by time alone when the room is overcooled; if the AC is already running, fan-only is HELD for another hysteresis below the threshold (a cooling overshoot won't turn it off), and only a deeper overcooling turns it off completely. If disabled, the AC is turned off completely (as before). When the virtual thermostat itself is turned off, the AC is always turned off completely."
             },
             type: "Boolean",
             value: false
@@ -921,25 +921,47 @@ function isFanOnlyWindowActive(options) {
     return hour >= from || hour < to
 }
 
-// Комната в «рабочей зоне» для обдува — на стороне спроса от цели, где обдув между
-// циклами осмыслен (скоро снова понадобится холод/тепло). Если комната ушла за порог
-// выключения (переохлаждена при охлаждении / перегрета при нагреве) — обдув не нужен,
-// кондиционер выключаем полностью. Точка совпадает с порогом эмуляции (цель ± гистерезис).
+// Включён ли кондиционер прямо сейчас (по выключателю питания, иначе по режиму
+// термостат-сервиса != Выкл). Нужно для гистерезиса обдува.
+function acCurrentlyOn(service, options) {
+    const power = getDevice(options, "acPowerSwitch")
+    if (power) {
+        const c = getPowerChar(power)
+        if (c) return toBool(c.getValue()) === true
+    }
+    const ac = getAcThermostat(service, options)
+    if (ac) {
+        const mc = ac.getCharacteristic(HC.TargetHeatingCoolingState)
+        if (mc) { const v = toNum(mc.getValue()); return v != null && v != 0 }
+    }
+    return false
+}
+
+// Комната в «рабочей зоне» для обдува, с гистерезисом:
+// • ЗАПУСК (кондиционер выключен) — только по достижению коридора: порог = цель ∓ гистерезис.
+//   Поэтому утром при переохлаждённой комнате обдув сам по времени НЕ включается.
+// • УДЕРЖАНИЕ (кондиционер уже работает) — допускаем заход ещё на гистерезис ниже порога,
+//   чтобы проскок охлаждения (например, 23.8 при пороге 24.0) не выключал кондей полностью.
+//   Между порогом запуска и порогом удержания состояние не дёргается (нет щёлканья у границы).
+//   Уйдёт глубже порога удержания (реальное переохлаждение) — полный выкл.
 function isRoomInWorkingZone(service, options, mode) {
     const room = toNum(getCharValue(service, HC.CurrentTemperature))
     if (room == null) return true // нет данных — не блокируем (поведение как раньше)
     let h = toNum(options.hysteresis)
     if (h == null) h = 0.5
+    const running = acCurrentlyOn(service, options)
     if (toNum(mode) == 1) { // нагрев: рабочая зона — не выше точки выключения
         const goal = toNum(getCharValue(service, HC.TargetTemperature))
         if (goal == null) return true
-        return room <= goal + h
+        const offpoint = goal + h
+        return room <= (running ? offpoint + h : offpoint)
     }
     // охлаждение (и прочие режимы, где простой обслуживается охлаждением)
     let goal = toNum(getCharValue(service, HC.TargetTemperature))
     if (goal == null) goal = toNum(getCharValue(service, HC.CoolingThresholdTemperature))
     if (goal == null) return true
-    return room >= goal - h
+    const offpoint = goal - h
+    return room >= (running ? offpoint - h : offpoint)
 }
 
 // Обдув без компрессора активен: окно по времени И комната в рабочей зоне по температуре.
