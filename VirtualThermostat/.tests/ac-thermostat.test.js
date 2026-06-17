@@ -1012,7 +1012,7 @@ describe('AC §"Плавная целевая температура (acSmoothTa
 
 describe('AC §"Вентилятор без компрессора (acFanOnlyAtTarget)"', () => {
   it('цель достигнута → кондиционер НЕ выключается: режим остаётся, целевая = собственная +2', ({ hub, scenario }) => {
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true });
@@ -1023,6 +1023,31 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
     expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
     expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
     // Целевая температура выше собственного датчика → компрессор стоит, вентилятор крутит
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
+  });
+
+  it('окно активно, но комната ниже порога выключения (переохлаждена) → обдува НЕТ, кондиционер выключен полностью', ({ hub, scenario }) => {
+    // цель 24, гистерезис 0.5 → порог выключения 23.5; комната 21.8 (как переохлаждённое утро)
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 21.8, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 24, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.5 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    // вне рабочей зоны по температуре → обдув не включаем, питание выключено
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
+  it('окно активно, комната в рабочей зоне (>= порога выключения) → обдув включается', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.8, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.5 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
   });
 
@@ -1049,7 +1074,7 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
   });
 
   it('простой с вентилятором: события питания и режима — эхо, термостат не трогается', ({ hub, scenario }) => {
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true });
@@ -1065,7 +1090,7 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
   });
 
   it('комната снова прогрелась → из простоя обратно в охлаждение с рабочей целевой температурой', ({ hub, scenario }) => {
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, emulateThermostat: true });
@@ -1090,7 +1115,7 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
 describe('AC §"Окно времени вентилятора без компрессора"', () => {
   it('час внутри окна (8–23) → вентилятор без компрессора', ({ hub, scenario, time }) => {
     time.set('2024-06-21T12:00:00Z'); // 12:00
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 8, acFanOnlyTo: 23 });
@@ -1117,7 +1142,7 @@ describe('AC §"Окно времени вентилятора без компр
     const options = (ac) => baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 22, acFanOnlyTo: 7 });
 
     time.set('2024-06-21T23:00:00Z');
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
     const vars = freshVars();
     runTrigger(scenario, t, options(ac), vars, 2);
@@ -1130,7 +1155,7 @@ describe('AC §"Окно времени вентилятора без компр
 
   it('совпадающие границы (0–0) → круглосуточно', ({ hub, scenario, time }) => {
     time.set('2024-06-21T03:00:00Z');
-    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });
     const vars = freshVars();
     const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, acFanOnlyFrom: 0, acFanOnlyTo: 0 });

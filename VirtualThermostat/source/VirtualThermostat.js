@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.8.1-ac",
+    version: "3.9.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -172,8 +172,8 @@ info = {
                 ru: "После достижения цели — вентилятор без компрессора"
             },
             desc: {
-                ru: "Если включено: когда комната достигла цели, кондиционер не выключается — ему ставится целевая температура чуть выше собственной (при охлаждении; при нагреве — чуть ниже), компрессор останавливается, а вентилятор продолжает перемешивать воздух. Если выключено — кондиционер полностью выключается (как раньше). При выключении самого виртуального термостата кондиционер всегда выключается полностью.",
-                en: "If enabled: when the room reaches the goal the AC is not turned off — its target temperature is set slightly above its own reading (for cooling; below for heating), the compressor stops and the fan keeps circulating air. If disabled, the AC is turned off completely (as before). When the virtual thermostat itself is turned off, the AC is always turned off completely."
+                ru: "Если включено: когда комната достигла цели, кондиционер не выключается — ему ставится целевая температура чуть выше собственной (при охлаждении; при нагреве — чуть ниже), компрессор останавливается, а вентилятор продолжает перемешивать воздух. Обдув работает только когда комната в рабочей зоне (не ниже порога выключения = цель − гистерезис) И внутри интервала по времени; если комната ушла ниже порога (переохлаждена), кондиционер выключается полностью. Если опция выключена — кондиционер полностью выключается (как раньше). При выключении самого виртуального термостата кондиционер всегда выключается полностью.",
+                en: "If enabled: when the room reaches the goal the AC is not turned off — its target temperature is set slightly above its own reading (for cooling; below for heating), the compressor stops and the fan keeps circulating air. Fan-only runs only while the room is in the working zone (not below the off-point = goal − hysteresis) AND within the time interval; if the room drifts below the off-point (overcooled), the AC is turned off completely. If disabled, the AC is turned off completely (as before). When the virtual thermostat itself is turned off, the AC is always turned off completely."
             },
             type: "Boolean",
             value: false
@@ -533,7 +533,7 @@ function handleHeatingCoolingLogic(source, options, variables) {
     // currentState == 0 — цель достигнута, термостат в простое
     setRelayValue(heatingRelay, false, source, options.debug)
     setRelayValue(coolingRelay, false, source, options.debug)
-    if (isFanOnlyWindowActive(options) && acThermostat) {
+    if (isFanOnlyActive(service, options, targetState) && acThermostat) {
         const standbyMode = toNum(targetState) == 1 ? 1 : 2
         logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер: вентилятор без компрессора`, source, options.debug)
         setAcMode(acThermostat, standbyMode, getAcStandbyTemp(acThermostat, standbyMode, options), source, options, variables)
@@ -899,7 +899,7 @@ function computeDesiredAcState(service, options) {
     if (current == 1) return 1
     if (current == 2) return 2
     // Цель достигнута (простой активного термостата)
-    if (isFanOnlyWindowActive(options)) {
+    if (isFanOnlyActive(service, options, target)) {
         return target == 1 ? 1 : 2
     }
     return 0
@@ -919,6 +919,32 @@ function isFanOnlyWindowActive(options) {
     const hour = new Date().getHours()
     if (from < to) return hour >= from && hour < to
     return hour >= from || hour < to
+}
+
+// Комната в «рабочей зоне» для обдува — на стороне спроса от цели, где обдув между
+// циклами осмыслен (скоро снова понадобится холод/тепло). Если комната ушла за порог
+// выключения (переохлаждена при охлаждении / перегрета при нагреве) — обдув не нужен,
+// кондиционер выключаем полностью. Точка совпадает с порогом эмуляции (цель ± гистерезис).
+function isRoomInWorkingZone(service, options, mode) {
+    const room = toNum(getCharValue(service, HC.CurrentTemperature))
+    if (room == null) return true // нет данных — не блокируем (поведение как раньше)
+    let h = toNum(options.hysteresis)
+    if (h == null) h = 0.5
+    if (toNum(mode) == 1) { // нагрев: рабочая зона — не выше точки выключения
+        const goal = toNum(getCharValue(service, HC.TargetTemperature))
+        if (goal == null) return true
+        return room <= goal + h
+    }
+    // охлаждение (и прочие режимы, где простой обслуживается охлаждением)
+    let goal = toNum(getCharValue(service, HC.TargetTemperature))
+    if (goal == null) goal = toNum(getCharValue(service, HC.CoolingThresholdTemperature))
+    if (goal == null) return true
+    return room >= goal - h
+}
+
+// Обдув без компрессора активен: окно по времени И комната в рабочей зоне по температуре.
+function isFanOnlyActive(service, options, mode) {
+    return isFanOnlyWindowActive(options) && isRoomInWorkingZone(service, options, mode)
 }
 
 // Целевая температура кондиционера в активной фазе (нагрев/охлаждение).
@@ -964,7 +990,7 @@ function computeExpectedAcTemp(acService, service, options, desired) {
     if (desired == null || desired == 0) return null
     const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const current = currentChar ? toNum(currentChar.getValue()) : null
-    if (isFanOnlyWindowActive(options) && current == 0) {
+    if (isFanOnlyActive(service, options, desired) && current == 0) {
         return getAcStandbyTemp(acService, desired, options)
     }
     return getAcActiveTemp(acService, desired, service, options)
