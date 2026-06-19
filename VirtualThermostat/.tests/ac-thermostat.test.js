@@ -1071,6 +1071,34 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
     expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
   });
 
+  // РЕГРЕСС 19.06: после охлаждения комната паркуется у самого пола коридора, а выключатель
+  // питания VIOMI к 15-минутному тику уже просел в 0 (компрессор простаивает). «Работает»
+  // определяется по намерению сценария (acLastSetState != 0), поэтому берётся мягкий порог
+  // удержания, и кондей НЕ выключается полностью. Цель 24.3, гист 0.3 → пол 24.0, удержание 23.7.
+  it('УДЕРЖАНИЕ (липкое): питание читается ВЫКЛ, но сценарий в standby — комната 23.9 у пола → обдув держится', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.9, targetTemp: 24.3 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 26, currentTemp: 24, withPower: true, power: false });
+    const vars = freshVars();
+    vars.acLastSetState = 2; // сценарий только что охлаждал / стоит в standby
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.3 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);
+  });
+
+  it('ЗАПУСК сохранён: кондей реально выключен (acLastSetState=0), питание ВЫКЛ, комната 23.9 < пол 24.0 → НЕ просыпается', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.9, targetTemp: 24.3 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 24, withPower: true, power: false });
+    const vars = freshVars();
+    vars.acLastSetState = 0; // кондей полностью выключен — действует строгий порог запуска
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true, hysteresis: 0.3 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(false);
+  });
+
   it('опция выключена → кондиционер выключается полностью (как раньше)', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.4, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, withPower: true, power: true });

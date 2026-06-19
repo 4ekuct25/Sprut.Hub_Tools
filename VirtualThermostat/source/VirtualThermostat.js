@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.9.1-ac",
+    version: "3.9.2-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -533,7 +533,7 @@ function handleHeatingCoolingLogic(source, options, variables) {
     // currentState == 0 — цель достигнута, термостат в простое
     setRelayValue(heatingRelay, false, source, options.debug)
     setRelayValue(coolingRelay, false, source, options.debug)
-    if (isFanOnlyActive(service, options, targetState) && acThermostat) {
+    if (isFanOnlyActive(service, options, targetState, variables) && acThermostat) {
         const standbyMode = toNum(targetState) == 1 ? 1 : 2
         logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер: вентилятор без компрессора`, source, options.debug)
         setAcMode(acThermostat, standbyMode, getAcStandbyTemp(acThermostat, standbyMode, options), source, options, variables)
@@ -888,7 +888,7 @@ function toNum(value) {
 // 2 — охлаждение. null — определить нельзя.
 // В режиме «вентилятор без компрессора» (acFanOnlyAtTarget) при достигнутой цели
 // кондиционер остаётся включённым — желаемый режим не 0, а рабочий.
-function computeDesiredAcState(service, options) {
+function computeDesiredAcState(service, options, variables) {
     const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
     const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     if (!targetChar || !currentChar) return null
@@ -899,7 +899,7 @@ function computeDesiredAcState(service, options) {
     if (current == 1) return 1
     if (current == 2) return 2
     // Цель достигнута (простой активного термостата)
-    if (isFanOnlyActive(service, options, target)) {
+    if (isFanOnlyActive(service, options, target, variables)) {
         return target == 1 ? 1 : 2
     }
     return 0
@@ -944,12 +944,17 @@ function acCurrentlyOn(service, options) {
 //   чтобы проскок охлаждения (например, 23.8 при пороге 24.0) не выключал кондей полностью.
 //   Между порогом запуска и порогом удержания состояние не дёргается (нет щёлканья у границы).
 //   Уйдёт глубже порога удержания (реальное переохлаждение) — полный выкл.
-function isRoomInWorkingZone(service, options, mode) {
+// «Работает» определяем по намерению сценария (acLastSetState != 0), а не только по живому
+// чтению питания: у части кондиционеров (VIOMI) выключатель проседает в 0, когда компрессор
+// простаивает в обдув-standby. Без этого на 15-минутном тике у самого пола коридора брался бы
+// строгий порог ЗАПУСКА, и комната, чуть просевшая ниже цели, выключала бы кондей полностью.
+function isRoomInWorkingZone(service, options, mode, variables) {
     const room = toNum(getCharValue(service, HC.CurrentTemperature))
     if (room == null) return true // нет данных — не блокируем (поведение как раньше)
     let h = toNum(options.hysteresis)
     if (h == null) h = 0.5
-    const running = acCurrentlyOn(service, options)
+    const lastSet = variables != null ? toNum(variables.acLastSetState) : null
+    const running = acCurrentlyOn(service, options) || (lastSet != null && lastSet != 0)
     if (toNum(mode) == 1) { // нагрев: рабочая зона — не выше точки выключения
         const goal = toNum(getCharValue(service, HC.TargetTemperature))
         if (goal == null) return true
@@ -965,8 +970,8 @@ function isRoomInWorkingZone(service, options, mode) {
 }
 
 // Обдув без компрессора активен: окно по времени И комната в рабочей зоне по температуре.
-function isFanOnlyActive(service, options, mode) {
-    return isFanOnlyWindowActive(options) && isRoomInWorkingZone(service, options, mode)
+function isFanOnlyActive(service, options, mode, variables) {
+    return isFanOnlyWindowActive(options) && isRoomInWorkingZone(service, options, mode, variables)
 }
 
 // Целевая температура кондиционера в активной фазе (нагрев/охлаждение).
@@ -1008,11 +1013,11 @@ function getAcStandbyTemp(ac, state, options) {
 
 // Ожидаемая сценарием целевая температура кондиционера прямо сейчас
 // (для распознавания эха в подписке). null — определить нельзя.
-function computeExpectedAcTemp(acService, service, options, desired) {
+function computeExpectedAcTemp(acService, service, options, desired, variables) {
     if (desired == null || desired == 0) return null
     const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const current = currentChar ? toNum(currentChar.getValue()) : null
-    if (isFanOnlyActive(service, options, desired) && current == 0) {
+    if (isFanOnlyActive(service, options, desired, variables) && current == 0) {
         return getAcStandbyTemp(acService, desired, options)
     }
     return getAcActiveTemp(acService, desired, service, options)
@@ -1056,7 +1061,7 @@ function subscribeToAcState(service, variables, options) {
             // Состояние кондиционера, которого сценарий сам сейчас добивается.
             // Это проверка БЕЗ опоры на память (variables): если событие совпадает
             // с желаемым состоянием — это эхо собственной команды, а не пользователь.
-            const desired = computeDesiredAcState(service, options)
+            const desired = computeDesiredAcState(service, options, variables)
 
             logDebug(`AC-событие: ${type} = ${acValue} (typeof ${typeof acValue}, num ${numValue}), lastSetState=${variables.acLastSetState}, lastSetTemp=${variables.acLastSetTemp}, desired=${desired}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
 
@@ -1102,7 +1107,7 @@ function subscribeToAcState(service, variables, options) {
                 // Целевая температура совпадает с той, что выставил бы сценарий — эхо.
                 // Допуск 1.5° покрывает шаг кондиционера 1° и дрейф плавного расчёта.
                 if (desired != null && numValue != null) {
-                    const wantTemp = computeExpectedAcTemp(acService, service, options, desired)
+                    const wantTemp = computeExpectedAcTemp(acService, service, options, desired, variables)
                     if (wantTemp != null) {
                         const tempChar = acService.getCharacteristic(HC.TargetTemperature)
                         const clamped = tempChar ? clampToCharRange(wantTemp, tempChar) : wantTemp
@@ -1122,7 +1127,7 @@ function subscribeToAcState(service, variables, options) {
                         // принимает '/' рядом с ${} за начало регулярного выражения.
                         const sinceSec = Math.round(sinceCmd * 0.001)
                         logWarn("Кондиционер сообщил режим " + numValue + ", ожидается " + desired + " (через " + sinceSec + "с после команды) — повторяю команду (" + count + " из " + AC_REASSERT_MAX + ")", thermostatSource)
-                        const temp = computeExpectedAcTemp(acService, service, options, desired)
+                        const temp = computeExpectedAcTemp(acService, service, options, desired, variables)
                         setAcMode(acService, desired, temp, thermostatSource, options, variables)
                         return
                     }
@@ -1203,7 +1208,7 @@ function subscribeToAcPower(service, variables, options) {
             if (powerService.getUUID() != options.acPowerSwitch) return
 
             const isOn = toBool(powerValue)
-            const desired = computeDesiredAcState(service, options)
+            const desired = computeDesiredAcState(service, options, variables)
             const desiredPower = desired != null ? desired != 0 : null
 
             const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
