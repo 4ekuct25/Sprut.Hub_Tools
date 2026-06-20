@@ -955,6 +955,28 @@ describe('AC §"Плавная целевая температура (acSmoothTa
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
   });
 
+  it('охлаждение: дробная .5 округляется ВНИЗ (floor) — сильнее тянет холод', ({ hub, scenario }) => {
+    // собств 27.5, комната 27, цель 24 → 27.5 + (24-27) = 24.5 → floor 24 (Math.round дал бы 25)
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 27.5 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 2);
+
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
+  it('нагрев: дробная округляется ВВЕРХ (ceil) — симметрично, не ослабляет нагрев', ({ hub, scenario }) => {
+    // собств 22.4, комната 20, цель 24 → 22.4 + (24-20) = 26.4 → ceil 27 (Math.round дал бы 26)
+    const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 20, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 22.4 });
+    const vars = freshVars();
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true }), vars, 1);
+
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(27);
+  });
+
   it('антиспам: мелкая подстройка в течение 2 минут откладывается, скачок ≥2° проходит', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
@@ -964,8 +986,8 @@ describe('AC §"Плавная целевая температура (acSmoothTa
     runTrigger(scenario, t, options, vars, 2);
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
 
-    // Комната чуть остыла: 27→26.4 → расчёт 28-(26.4-24)=25.6→26 — разница 1° и интервал не прошёл → ждём
-    t.char(HS.Thermostat, HC.CurrentTemperature).setValue(26.4);
+    // Комната чуть остыла: 27→25.5 → расчёт 28-(25.5-24)=26.5, floor→26 — разница 1° и интервал не прошёл → ждём
+    t.char(HS.Thermostat, HC.CurrentTemperature).setValue(25.5);
     runTrigger(scenario, t, options, vars, 2);
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
 

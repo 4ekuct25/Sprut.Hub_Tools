@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.9.2-ac",
+    version: "3.9.3-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -994,9 +994,15 @@ function computeSmoothAcTemp(ac, state, service, options) {
     // Требуем от кондиционера сместить его собственное показание на отставание
     // комнаты (по внешнему датчику) от цели, умноженное на «Силу плавного режима».
     // Работает и для нагрева, и для охлаждения. Шаг кондиционера — 1°C.
+    // Округляем в сторону более сильной коррекции: при охлаждении — ВНИЗ (холоднее),
+    // при нагреве — ВВЕРХ (теплее). Раньше был Math.round (ничьи .5 — вверх), из-за чего
+    // у пика жары целевая «съедала» полградуса и охлаждение недодавало (собств. 25.5 →
+    // целевая 25 при силе 2 = почти простой). Floor при охлаждении даёт целевую 24 и
+    // компрессор реально тянет вниз.
     let factor = toNum(options.acSmoothFactor)
     if (factor == null || factor < 1) factor = 1
-    const result = Math.round(acInternal + factor * (goal - ext))
+    const raw = acInternal + factor * (goal - ext)
+    const result = toNum(state) == 1 ? Math.ceil(raw) : Math.floor(raw)
     logDebug(`Плавная целевая: собств.${acInternal} + сила ${factor}·(цель ${goal} − комната ${ext}) = ${result}°C`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
     return result
 }
