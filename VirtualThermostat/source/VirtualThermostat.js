@@ -1095,6 +1095,34 @@ function clampToCharRange(value, characteristic) {
 // • Термостат выключен, кондиционер ВКЛЮЧИЛИ вручную — термостат включается
 //   в соответствующий режим (Нагрев/Охлаждение/Авто) и берёт управление.
 // Эхо собственных команд и запоздалые подтверждения устройства отфильтровываются.
+// Окно подавления запоздалых событий после собственной команды: реальные интеграции
+// (VIOMI) переизлучают старое состояние через несколько секунд — это не ручное вмешательство.
+// Возвращает { sinceCmd: мс с момента команды (или null), inEchoWindow: внутри ли окна }.
+function echoWindow(variables) {
+    const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
+    const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
+    return { sinceCmd: sinceCmd, inEchoWindow: inEchoWindow }
+}
+
+// Увеличивает счётчик мягких переотправок. Возвращает новое значение, если лимит
+// AC_REASSERT_MAX не исчерпан (и сохраняет его), иначе null — пора отдать управление.
+function bumpReassert(variables) {
+    const count = (variables.acReassertCount || 0) + 1
+    if (count <= AC_REASSERT_MAX) {
+        variables.acReassertCount = count
+        return count
+    }
+    return null
+}
+
+// Берёт кондиционер под ручное управление: ставит acManualOverride, пишет предупреждение
+// и выключает виртуальный термостат (целевой режим → 0). Дальше кондей за пользователем.
+function takeManualOverride(targetChar, variables, message, source) {
+    variables.acManualOverride = true
+    logWarn(message, source)
+    if (targetChar) targetChar.setValue(0)
+}
+
 function subscribeToAcState(service, variables, options) {
     const acThermostat = getAcThermostat(service, options)
     if (!acThermostat) return
@@ -1122,8 +1150,9 @@ function subscribeToAcState(service, variables, options) {
             // Окно подавления после собственной команды. Реальные интеграции (например,
             // VIOMI) подтверждают команды асинхронно и могут переизлучить СТАРОЕ состояние
             // через несколько секунд после нашей записи — это не ручное вмешательство.
-            const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
-            const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
+            const ew = echoWindow(variables)
+            const sinceCmd = ew.sinceCmd
+            const inEchoWindow = ew.inEchoWindow
 
             const hasPowerSwitch = options.acPowerSwitch != null && options.acPowerSwitch !== ''
 
@@ -1174,9 +1203,8 @@ function subscribeToAcState(service, variables, options) {
             // а мягко повторяем команду (не более AC_REASSERT_MAX раз, дальше — ручной режим).
             if (inEchoWindow) {
                 if (type === HC.TargetHeatingCoolingState && desired != null && numValue != desired) {
-                    const count = (variables.acReassertCount || 0) + 1
-                    if (count <= AC_REASSERT_MAX) {
-                        variables.acReassertCount = count
+                    const count = bumpReassert(variables)
+                    if (count != null) {
                         // Без деления и слэшей внутри шаблонной строки: парсер Nashorn в Sprut.Hub
                         // принимает '/' рядом с ${} за начало регулярного выражения.
                         const sinceSec = Math.round(sinceCmd * 0.001)
@@ -1216,10 +1244,8 @@ function subscribeToAcState(service, variables, options) {
             // Если уже в ручном режиме — ничего не делаем
             if (variables.acManualOverride) return
 
-            variables.acManualOverride = true
             const what = type === HC.TargetTemperature ? `целевая температура → ${acValue}°C` : `целевой режим → ${acValue}`
-            logWarn(`Кондиционер изменён вручную (${what}) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат снова.`, thermostatSource)
-            targetChar.setValue(0)
+            takeManualOverride(targetChar, variables, `Кондиционер изменён вручную (${what}) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат снова.`, thermostatSource)
         } catch (e) {
             logError("Ошибка обработки ручного изменения кондиционера: " + e.toString())
         }
@@ -1265,8 +1291,7 @@ function subscribeToAcPower(service, variables, options) {
             const desired = computeDesiredAcState(service, options, variables)
             const desiredPower = desired != null ? desired != 0 : null
 
-            const sinceCmd = variables.acLastCommandTime != null ? (Date.now() - variables.acLastCommandTime) : null
-            const inEchoWindow = sinceCmd != null && sinceCmd >= 0 && sinceCmd < AC_ECHO_WINDOW_MS
+            const inEchoWindow = echoWindow(variables).inEchoWindow
 
             logDebug(`AC-питание: ${powerValue} (isOn ${isOn}), lastSetPower=${variables.acLastSetPower}, desiredPower=${desiredPower}, inWindow=${inEchoWindow}, override=${variables.acManualOverride}`, thermostatSource, options.debug)
 
@@ -1293,9 +1318,8 @@ function subscribeToAcPower(service, variables, options) {
             // Запоздалое расхождение внутри окна — мягко переотправляем питание
             if (inEchoWindow) {
                 if (desiredPower != null) {
-                    const count = (variables.acReassertCount || 0) + 1
-                    if (count <= AC_REASSERT_MAX) {
-                        variables.acReassertCount = count
+                    const count = bumpReassert(variables)
+                    if (count != null) {
                         logWarn("Кондиционер сообщил питание " + isOn + ", ожидается " + desiredPower + " — повторяю команду (" + count + " из " + AC_REASSERT_MAX + ")", thermostatSource)
                         writePower(power, desiredPower, thermostatSource, options, variables)
                         return
@@ -1339,13 +1363,9 @@ function subscribeToAcPower(service, variables, options) {
             //   пультом — без этой ветки сценарий молча выключил бы его при следующем
             //   пересчёте, воюя с пользователем.
             if (isOn === false) {
-                variables.acManualOverride = true
-                logWarn("Кондиционер выключен вручную (выключатель) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат или кондиционер снова.", thermostatSource)
-                targetChar.setValue(0)
+                takeManualOverride(targetChar, variables, "Кондиционер выключен вручную (выключатель) — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат или кондиционер снова.", thermostatSource)
             } else if (isOn === true) {
-                variables.acManualOverride = true
-                logWarn("Кондиционер включён вручную, хотя термостат в простое — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат снова.", thermostatSource)
-                targetChar.setValue(0)
+                takeManualOverride(targetChar, variables, "Кондиционер включён вручную, хотя термостат в простое — выключаю виртуальный термостат и отдаю управление. Чтобы вернуть автоматику, включите термостат снова.", thermostatSource)
             }
         } catch (e) {
             logError("Ошибка обработки выключателя кондиционера: " + e.toString())
