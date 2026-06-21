@@ -1404,6 +1404,31 @@ function computeFanSpeedByDiff(service, options) {
     return { speed: speed, diff: diff, step: fanTempStep }
 }
 
+// Ограничивает скорость диапазоном [min, max] характеристики устройства.
+function clampSpeedToChar(char, speed) {
+    let s = speed
+    const mx = toNum(char.getMaxValue())
+    const mn = toNum(char.getMinValue())
+    if (mx != null && s > mx) s = mx
+    if (mn != null && s < mn) s = mn
+    return s
+}
+
+// Применяет вычисленную скорость к характеристике вентилятора: кламп к диапазону,
+// установка при отличии и лог. label — префикс сообщения; logSame — логировать ли,
+// когда значение не изменилось. Возвращает применённую (клампнутую) скорость.
+function applyFanSpeed(char, computed, label, logSame, options) {
+    const s = clampSpeedToChar(char, computed.speed)
+    const cur = toNum(char.getValue())
+    if (cur != s) {
+        char.setValue(s)
+        logDebug(`${label}: ${cur} → ${s} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, char, options.debug)
+    } else if (logSame) {
+        logDebug(`${label} остаётся ${s} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, char, options.debug)
+    }
+    return s
+}
+
 function updateVirtualFanSpeed(service, variables, options) {
     try {
         const fanSpeedChar = service.getCharacteristic(HC.C_FanSpeed)
@@ -1416,8 +1441,6 @@ function updateVirtualFanSpeed(service, variables, options) {
             logDebug(`Скорость вентилятора зафиксирована пользователем (fanSpeedManuallySet=true) — пропуск. Поставьте Авто (0), чтобы вернуть автоматический режим.`, fanSpeedChar, options.debug)
             return
         }
-
-        const maxSpeed = fanSpeedChar.getMaxValue()
 
         // Если термостат выключен, устанавливаем минимальную скорость вентилятора
         const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
@@ -1439,19 +1462,7 @@ function updateVirtualFanSpeed(service, variables, options) {
             return
         }
 
-        // Ограничиваем скорость максимальным значением
-        let speed = computed.speed
-        if (speed > maxSpeed) {
-            speed = maxSpeed
-        }
-
-        const currentSpeed = fanSpeedChar.getValue()
-        if (currentSpeed != speed) {
-            fanSpeedChar.setValue(speed)
-            logDebug(`Скорость вентилятора: ${currentSpeed} → ${speed} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, fanSpeedChar, options.debug)
-        } else {
-            logDebug(`Скорость вентилятора остаётся ${speed} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, fanSpeedChar, options.debug)
-        }
+        applyFanSpeed(fanSpeedChar, computed, "Скорость вентилятора", true, options)
     } catch (e) {
         logError("Ошибка обновления скорости вентилятора: " + e.toString())
     }
@@ -1505,17 +1516,7 @@ function updateAcFanSpeed(service, variables, options) {
             return
         }
 
-        let speed = computed.speed
-        const maxSpeed = acFanChar.getMaxValue()
-        const minSpeed = acFanChar.getMinValue()
-        if (toNum(maxSpeed) != null && speed > toNum(maxSpeed)) speed = toNum(maxSpeed)
-        if (toNum(minSpeed) != null && speed < toNum(minSpeed)) speed = toNum(minSpeed)
-
-        if (acCurrentSpeed != speed) {
-            acFanChar.setValue(speed)
-            logDebug(`Вентилятор кондиционера: ${acCurrentSpeed} → ${speed} (разница ${computed.diff.toFixed(2)}°C, шаг ${computed.step})`, acFanChar, options.debug)
-        }
-        variables.acLastSetFanSpeed = speed
+        variables.acLastSetFanSpeed = applyFanSpeed(acFanChar, computed, "Вентилятор кондиционера", false, options)
     } catch (e) {
         logError("Ошибка обновления скорости вентилятора кондиционера: " + e.toString())
     }
