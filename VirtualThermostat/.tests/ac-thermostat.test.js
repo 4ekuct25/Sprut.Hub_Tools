@@ -977,6 +977,25 @@ describe('AC §"Плавная целевая температура (acSmoothTa
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(27);
   });
 
+  it('упреждение: компрессор глохнет ВЫШЕ цели — у цели целевая = собств. (а не ниже)', ({ hub, scenario }) => {
+    // собств 25, комната 24.1, цель 24, сила 3, упреждение 0.2 → цель_эфф 24.2
+    // целевая = floor(25 + 3*(24.2-24.1)) = floor(25.3) = 25 (= собств → компрессор простаивает)
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.1, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 3, acAnticipate: 0.2 });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+  });
+
+  it('без упреждения та же ситуация → целевая ниже собств. (компрессор ещё тянет)', ({ hub, scenario }) => {
+    // floor(25 + 3*(24-24.1)) = floor(24.7) = 24 (< собств 25 → охлаждает)
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.1, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 3 });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
   it('антиспам: мелкая подстройка в течение 2 минут откладывается, скачок ≥2° проходит', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });

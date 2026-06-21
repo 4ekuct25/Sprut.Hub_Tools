@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.10.0-ac",
+    version: "3.11.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -165,6 +165,21 @@ info = {
             minValue: 1.0,
             maxValue: 5.0,
             minStep: 0.5
+        },
+        acAnticipate: {
+            name: {
+                en: "Cooling anticipation (°C)",
+                ru: "Упреждение охлаждения (°C)"
+            },
+            desc: {
+                ru: "Насколько ВЫШЕ цели глушить компрессор (при охлаждении; при нагреве — ниже). Компрессор останавливается, когда комната в пределах этого запаса от цели, а остаточный холод змеевика доводит её до самой цели — так комната не «протягивается» ниже коридора. Вентилятор при этом продолжает работать (перемешивание сохраняется). Лечит переохлаждение на прохладных днях, когда короткий рывок компрессора переохлаждает комнату из-за инерции змеевика. Слишком большой запас ставить нельзя: если он больше, чем комната поднимается над целью, компрессор вообще не включится. Разумно 0.1–0.3. 0 — выключено (по умолчанию). Работает только при включённой «Плавной целевой температуре».",
+                en: "How much ABOVE the goal to stop the compressor (for cooling; below for heating). The compressor idles once the room is within this margin of the goal, and the residual coil cold finishes bringing it to the goal — so the room is not dragged below the corridor. The fan keeps running (circulation preserved). Fixes overcooling on cool days, when a short compressor burst overcools the room due to coil thermal inertia. Do not set it larger than how far the room rises above the goal, or the compressor will never start. Reasonable range 0.1–0.3. 0 disables it (default). Active only when 'Smooth AC target temperature' is on."
+            },
+            type: "Double",
+            value: 0.0,
+            minValue: 0.0,
+            maxValue: 1.0,
+            minStep: 0.1
         },
         acFanOnlyAtTarget: {
             name: {
@@ -1014,9 +1029,17 @@ function computeSmoothAcTemp(ac, state, service, options) {
     // компрессор реально тянет вниз.
     let factor = toNum(options.acSmoothFactor)
     if (factor == null || factor < 1) factor = 1
-    const raw = acInternal + factor * (goal - ext)
+    // Упреждение (acAnticipate): глушим компрессор не у самой цели, а на запас ВЫШЕ цели
+    // (при охлаждении) — короче рывок, змеевик меньше переохлаждается, и остаточный холод
+    // доводит комнату до цели, а не ниже. Компрессор простаивает при комнате ≤ цель+упреждение.
+    // Вентилятор при этом продолжает работать (перемешивание не теряется). Для нагрева — симметрично.
+    let anticipate = toNum(options.acAnticipate)
+    if (anticipate == null || anticipate < 0) anticipate = 0
+    const goalEff = anticipate > 0 ? (toNum(state) == 1 ? goal - anticipate : goal + anticipate) : goal
+    const raw = acInternal + factor * (goalEff - ext)
     const result = toNum(state) == 1 ? Math.ceil(raw) : Math.floor(raw)
-    logDebug(`Плавная целевая: собств.${acInternal} + сила ${factor}·(цель ${goal} − комната ${ext}) = ${result}°C`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
+    const goalLog = anticipate > 0 ? `${goalEff} (цель ${goal} + упрежд. ${anticipate})` : `${goal}`
+    logDebug(`Плавная целевая: собств.${acInternal} + сила ${factor}·(цель ${goalLog} − комната ${ext}) = ${result}°C`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
     return result
 }
 
