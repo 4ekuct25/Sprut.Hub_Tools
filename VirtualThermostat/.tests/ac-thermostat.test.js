@@ -1400,3 +1400,49 @@ describe('AC §"Осушитель/Вентилятор — отступлени
     expect(ac.char(HS.Thermostat, HC.TargetHeatingCoolingState).getValue()).toBe(2);
   });
 });
+
+// ===========================================================================
+// AC §"Удержание у цели охлаждением (acModulateAtTarget)" — вариант 3:
+// в зоне у цели вместо обдува держим каскадную целевую; компрессор сам идёт
+// в простой при комнате ≤ цели и мягко подхватывает чуть выше цели (меньше «пилы»).
+// standby (обдув) = собств + 2; модуляция = плавная каскадная (floor при охлаждении).
+// ===========================================================================
+describe('AC §"Удержание у цели охлаждением (acModulateAtTarget)"', () => {
+  it('модуляция ВКЛ, комната = цели → целевая = собственная (компрессор в простое), а не обдувная +2', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25, withPower: true, power: true });
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac),
+      acFanOnlyAtTarget: true, acSmoothTarget: true, acModulateAtTarget: true });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    // каскад: floor(25 + 1*(24-24)) = 25 (= собств., компрессор нейтрален). Обдув дал бы 27.
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+  });
+
+  it('модуляция ВКЛ, комната чуть выше цели → мягкое охлаждение (целевая ниже собств.), а не обдув', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.6, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25, withPower: true, power: true });
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac),
+      acFanOnlyAtTarget: true, acSmoothTarget: true, acSmoothFactor: 2, acModulateAtTarget: true });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    // floor(25 + 2*(24-24.6)) = floor(23.8) = 23 → компрессор тянет. Обдув дал бы 27.
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(23);
+  });
+
+  it('модуляция ВЫКЛ → прежний обдув (собств + 2)', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25, withPower: true, power: true });
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac),
+      acFanOnlyAtTarget: true, acSmoothTarget: true });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(27);
+  });
+
+  it('модуляция ВКЛ, но Плавная целевая ВЫКЛ → откат к обдуву (фикс. целевая переохладила бы)', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25, withPower: true, power: true });
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac),
+      acFanOnlyAtTarget: true, acSmoothTarget: false, acModulateAtTarget: true });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(27);
+  });
+});

@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.9.3-ac",
+    version: "3.10.0-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -174,6 +174,18 @@ info = {
             desc: {
                 ru: "Если включено: когда комната достигла цели, кондиционер не выключается — ему ставится целевая температура чуть выше собственной (при охлаждении; при нагреве — чуть ниже), компрессор останавливается, а вентилятор продолжает перемешивать воздух. Обдув работает только когда комната в рабочей зоне и внутри интервала по времени, с гистерезисом: ЗАПУСКАЕТСЯ по достижению коридора (порог = цель ∓ гистерезис) — сам по времени при переохлаждённой комнате не включается; если кондиционер уже работает, обдув УДЕРЖИВАЕТСЯ ещё на гистерезис ниже порога (проскок охлаждения не выключает кондей), а при более глубоком переохлаждении — полный выкл. Если опция выключена — кондиционер полностью выключается (как раньше). При выключении самого виртуального термостата кондиционер всегда выключается полностью.",
                 en: "If enabled: when the room reaches the goal the AC is not turned off — its target temperature is set slightly above its own reading (for cooling; below for heating), the compressor stops and the fan keeps circulating air. Fan-only runs only while the room is in the working zone and within the time interval, with hysteresis: it STARTS on reaching the corridor (threshold = goal ∓ hysteresis) — so it does not switch on by time alone when the room is overcooled; if the AC is already running, fan-only is HELD for another hysteresis below the threshold (a cooling overshoot won't turn it off), and only a deeper overcooling turns it off completely. If disabled, the AC is turned off completely (as before). When the virtual thermostat itself is turned off, the AC is always turned off completely."
+            },
+            type: "Boolean",
+            value: false
+        },
+        acModulateAtTarget: {
+            name: {
+                en: "Hold at goal by gentle cooling (instead of fan-only)",
+                ru: "Удержание у цели охлаждением (вместо обдува)"
+            },
+            desc: {
+                ru: "Уточняет поведение «вентилятора без компрессора»: в той же зоне у цели (то же окно и рабочая зона) кондиционеру ставится не «обдувная» целевая, а обычная плавная каскадная (собств. + сила·(цель − комната)). Когда комната ≤ цели, каскад даёт целевую выше собственного датчика — компрессор сам уходит в простой (как обдув); чуть выше цели — мягко подхватывает охлаждение, не дожидаясь верхней границы коридора. Это уменьшает «пилу» внутри гистерезиса: вместо полного выкл/вкл компрессор плавно модулируется и держит комнату у цели. Требует включённой «Плавной целевой температуры» (иначе откат к обдуву). Работает только при включённой опции «вентилятор без компрессора» (она задаёт окно и рабочую зону).",
+                en: "Refines the fan-without-compressor behavior: in the same at-goal zone (same window and working zone) the AC is given the normal smooth cascade target (own + strength·(goal − room)) instead of the fan-only target. When the room is ≤ goal the cascade yields a target above the AC's own sensor, so the compressor idles on its own (like fan-only); slightly above the goal it gently resumes cooling without waiting for the upper corridor edge. This reduces the sawtooth inside the hysteresis: instead of full off/on, the compressor modulates smoothly and holds the room at goal. Requires the Smooth target option (otherwise falls back to fan-only). Works only when the fan-without-compressor option is enabled (it defines the window and working zone)."
             },
             type: "Boolean",
             value: false
@@ -535,8 +547,9 @@ function handleHeatingCoolingLogic(source, options, variables) {
     setRelayValue(coolingRelay, false, source, options.debug)
     if (isFanOnlyActive(service, options, targetState, variables) && acThermostat) {
         const standbyMode = toNum(targetState) == 1 ? 1 : 2
-        logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер: вентилятор без компрессора`, source, options.debug)
-        setAcMode(acThermostat, standbyMode, getAcStandbyTemp(acThermostat, standbyMode, options), source, options, variables)
+        const holdMode = isModulateAtTarget(options) ? 'удержание у цели охлаждением' : 'вентилятор без компрессора'
+        logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер: ${holdMode}`, source, options.debug)
+        setAcMode(acThermostat, standbyMode, getAtTargetTemp(acThermostat, standbyMode, service, options), source, options, variables)
         return
     }
     logDebug(`Текущий режим = Выключен (target=${targetState}) → оба реле OFF, кондиционер OFF`, source, options.debug)
@@ -1017,6 +1030,24 @@ function getAcStandbyTemp(ac, state, options) {
     return state == 1 ? Math.round(acInternal) - AC_STANDBY_TEMP_OFFSET : Math.round(acInternal) + AC_STANDBY_TEMP_OFFSET
 }
 
+// Включена ли «непрерывная модуляция у цели» (вариант вместо обдува). Требует
+// «Плавной целевой» — без неё каскада нет, фиксированная целевая переохладит,
+// поэтому откатываемся к обдуву.
+function isModulateAtTarget(options) {
+    return options != null && options.acModulateAtTarget == true && options.acSmoothTarget == true
+}
+
+// Целевая кондиционера в зоне «у цели» (когда термостат в простое, но кондей в окне):
+// при включённой модуляции — каскадная (компрессор сам уходит в простой при комнате ≤ цели,
+// мягко подхватывает чуть выше цели → меньше «пилы»); иначе — обдувная (standby).
+function getAtTargetTemp(ac, mode, service, options) {
+    if (isModulateAtTarget(options)) {
+        const t = computeSmoothAcTemp(ac, mode, service, options)
+        if (t != null) return t
+    }
+    return getAcStandbyTemp(ac, mode, options)
+}
+
 // Ожидаемая сценарием целевая температура кондиционера прямо сейчас
 // (для распознавания эха в подписке). null — определить нельзя.
 function computeExpectedAcTemp(acService, service, options, desired, variables) {
@@ -1024,7 +1055,7 @@ function computeExpectedAcTemp(acService, service, options, desired, variables) 
     const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
     const current = currentChar ? toNum(currentChar.getValue()) : null
     if (isFanOnlyActive(service, options, desired, variables) && current == 0) {
-        return getAcStandbyTemp(acService, desired, options)
+        return getAtTargetTemp(acService, desired, service, options)
     }
     return getAcActiveTemp(acService, desired, service, options)
 }
