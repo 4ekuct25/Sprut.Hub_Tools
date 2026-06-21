@@ -590,9 +590,7 @@ function getAcThermostat(service, options) {
 function acIsDryOrFan(service, options) {
     const ac = getAcThermostat(service, options)
     if (!ac) return false
-    const ch = ac.getCharacteristic(HC.TargetHeatingCoolingState)
-    if (!ch) return false
-    const m = toNum(ch.getValue())
+    const m = toNum(getCharValue(ac, HC.TargetHeatingCoolingState))
     return m == -1 || m == -2
 }
 
@@ -917,11 +915,8 @@ function toNum(value) {
 // В режиме «вентилятор без компрессора» (acFanOnlyAtTarget) при достигнутой цели
 // кондиционер остаётся включённым — желаемый режим не 0, а рабочий.
 function computeDesiredAcState(service, options, variables) {
-    const targetChar = service.getCharacteristic(HC.TargetHeatingCoolingState)
-    const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
-    if (!targetChar || !currentChar) return null
-    const target = toNum(targetChar.getValue())
-    const current = toNum(currentChar.getValue())
+    const target = toNum(getCharValue(service, HC.TargetHeatingCoolingState))
+    const current = toNum(getCharValue(service, HC.CurrentHeatingCoolingState))
     if (target == null || current == null) return null
     if (target == 0 || target == -1 || target == -2) return 0
     if (current == 1) return 1
@@ -1075,8 +1070,7 @@ function getAtTargetTemp(ac, mode, service, options) {
 // (для распознавания эха в подписке). null — определить нельзя.
 function computeExpectedAcTemp(acService, service, options, desired, variables) {
     if (desired == null || desired == 0) return null
-    const currentChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
-    const current = currentChar ? toNum(currentChar.getValue()) : null
+    const current = toNum(getCharValue(service, HC.CurrentHeatingCoolingState))
     if (isFanOnlyActive(service, options, desired, variables) && current == 0) {
         return getAtTargetTemp(acService, desired, service, options)
     }
@@ -1324,8 +1318,7 @@ function subscribeToAcPower(service, variables, options) {
                     let mode = null
                     const acThermostat = getAcThermostat(service, options)
                     if (acThermostat) {
-                        const acModeChar = acThermostat.getCharacteristic(HC.TargetHeatingCoolingState)
-                        const acMode = acModeChar ? toNum(acModeChar.getValue()) : null
+                        const acMode = toNum(getCharValue(acThermostat, HC.TargetHeatingCoolingState))
                         if (acMode == 1 || acMode == 2 || acMode == 3) mode = acMode
                     }
                     if (mode == null) {
@@ -1390,10 +1383,8 @@ function updateFanSpeed(service, variables, options) {
 // 0 до step - скорость 1, step до 2*step - 2, 2*step до 3*step - 3, и т.д.
 // Возвращает null, если температуры неизвестны.
 function computeFanSpeedByDiff(service, options) {
-    const currentTempChar = service.getCharacteristic(HC.CurrentTemperature)
-    const targetTempChar = service.getCharacteristic(HC.TargetTemperature)
-    const currentTemp = currentTempChar ? currentTempChar.getValue() : null
-    const targetTemp = targetTempChar ? targetTempChar.getValue() : null
+    const currentTemp = getCharValue(service, HC.CurrentTemperature)
+    const targetTemp = getCharValue(service, HC.TargetTemperature)
     if (currentTemp == null || targetTemp == null) {
         return null
     }
