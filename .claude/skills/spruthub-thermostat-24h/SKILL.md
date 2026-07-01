@@ -48,6 +48,7 @@ ID стабильны для этих устройств. Если хаб пер
    python3 scripts/thermo24.py --from 08:00 --to 20:00   # дневное окно
    python3 scripts/thermo24.py --hours 24 --ymin 20 --ymax 29
    python3 scripts/thermo24.py --list                # показать доступные потоки
+   python3 scripts/thermo24.py --options             # живые опции сценария (hysteresis, fanTempStep…)
    ```
    PNG сохраняется в `./charts/vt_last24h_<дата>.png` (папка создаётся; переопределить `--outdir`/`--out`).
    Запускать из корня проекта `SH_VirtualThermostat`, чтобы график лёг в `charts/`.

@@ -22,7 +22,7 @@ N часов, строит ОДИН график (единая шкала тем
 
 Зависимости: pip install duckdb matplotlib  (--break-system-packages при необходимости)
 """
-import argparse, glob, os, sys, zipfile, tempfile, json
+import argparse, glob, os, sys, zipfile, tempfile, json, re, tarfile
 from datetime import datetime, timedelta
 
 # --- Местное смещение времени относительно UTC в БД (MSK = +3) ---
@@ -152,6 +152,55 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to):
     print("saved", out_png)
 
 
+def load_scenario_options(zip_path):
+    """Живые опции сценария из DevInfo: SQL/SprutHub/Recover/*.tar.gz -> SprutHub.data.
+    Возвращает список dict'ов (по одному на термостат-конфиг с ключом fanTempStep)."""
+    tmp = tempfile.mkdtemp(prefix="devopt_")
+    with zipfile.ZipFile(zip_path) as z:
+        for n in z.namelist():
+            if "/Recover/" in n and n.endswith(".tar.gz"):
+                z.extract(n, tmp)
+    recs = sorted(glob.glob(os.path.join(tmp, "**", "Recover", "*.tar.gz"), recursive=True))
+    if not recs:
+        return []
+    rt = tempfile.mkdtemp()
+    with tarfile.open(recs[-1]) as t:      # последний по имени = свежайший снимок
+        t.extractall(rt)
+    cand = glob.glob(os.path.join(rt, "**", "SprutHub.data"), recursive=True)
+    if not cand:
+        return []
+    raw = open(cand[0], "rb").read().decode("latin-1", "ignore")
+    out = []
+    for b in re.findall(r'\{[^{}]*?"fanTempStep"[^{}]*?\}', raw):
+        try:
+            out.append(json.loads(b))
+        except Exception:
+            pass
+    return out
+
+
+def print_options(opts, full=True):
+    if not opts:
+        print("опции сценария: не найдены в DevInfo (нет Recover/SprutHub.data)")
+        return
+    keys = ["hysteresis", "acSmoothFactor", "acAnticipate", "fanTempStep",
+            "acCoolTemp", "acHeatTemp", "acFanOnlyFrom", "acFanOnlyTo",
+            "acModulateAtTarget", "acFanOnlyAtTarget", "acFanControl",
+            "fanSpeedManualLock", "emulateThermostat", "failureBehavior",
+            "failureTimeout", "debug", "sensor", "acThermostat", "acPowerSwitch"]
+    for o in opts:
+        tag = f"датчик {o.get('sensor','?')} / кондей {o.get('acThermostat','?')}"
+        if full:
+            print(f"\n=== Опции сценария ({tag}) ===")
+            for k in keys:
+                if k in o:
+                    print(f"  {k:18} = {o[k]}")
+        else:
+            print("опции: гистерезис %s, сила %s, упреждение %s, fanTempStep %s  (%s)" % (
+                o.get("hysteresis"), o.get("acSmoothFactor"), o.get("acAnticipate"),
+                o.get("fanTempStep"), tag))
+
+
 def main():
     p = argparse.ArgumentParser(description="Суточный график термостата Sprut.Hub из DevInfo")
     p.add_argument("--downloads", default=os.path.expanduser("~/Downloads"))
@@ -164,13 +213,21 @@ def main():
     p.add_argument("--outdir", default=None, help="папка для PNG (по умолчанию ./charts)")
     p.add_argument("--out", default=None, help="полный путь PNG (переопределяет --outdir)")
     p.add_argument("--list", action="store_true", help="показать доступные потоки и выйти")
+    p.add_argument("--options", action="store_true", help="показать живые опции сценария и выйти")
     a = p.parse_args()
 
     zip_path = a.zip or find_latest_devinfo(a.downloads)
     print("DevInfo:", os.path.basename(zip_path))
+    if a.options:
+        print_options(load_scenario_options(zip_path), full=True)
+        return
     data, end_local = load_history(zip_path, a.hours, want_list=a.list)
     if a.list:
         return
+    try:
+        print_options(load_scenario_options(zip_path), full=False)
+    except Exception:
+        pass
     stamp = end_local.strftime("%Y-%m-%d")
     outdir = a.outdir or os.path.join(os.getcwd(), "charts")
     os.makedirs(outdir, exist_ok=True)
