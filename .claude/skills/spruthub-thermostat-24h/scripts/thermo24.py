@@ -36,6 +36,15 @@ STREAMS = {
     "ac_tgt": (22, 17, 22),   # целевая температура, которую сценарий шлёт в кондей
     "ac_fan": (22, 17, 24),   # скорость вентилятора кондея (1..3)
 }
+# Двери-герконы (a_id -> имя), c_id=15, значение 1=открыто. Важны для нагрузки на кондей.
+# ВАЖНО: ContactSensor шлёт только изменения — состояние реконструируем непрерывно
+# (затравка последним событием до окна + перенос через границы). Не фильтровать по дню!
+DOORS = {
+    4: "дверь кухня",   # Aqara MCCGQ11LM, serial 00158D0009F5C5A7
+    # 5:  "дверь коридор",
+    # 24: "дверь Саша",
+}
+
 # Прод-уставки термостата (для коридора/цели на графике)
 TARGET = 24.3
 CORRIDOR = (24.0, 24.6)
@@ -78,7 +87,7 @@ def load_history(zip_path, hours, want_list=False):
         print("Потоки за последние %d ч (a_id s_id c_id | n | min..max):" % hours)
         for r in rows:
             print("  %3d %3d %3d | %5d | %6s .. %-6s" % (r[0], r[1], r[2], r[3], r[4], r[5]))
-        return None, mx
+        return None, mx, {}
 
     off = TZ_OFFSET_HOURS * 3600
     data = {}
@@ -89,7 +98,37 @@ def load_history(zip_path, hours, want_list=False):
         ).fetchall()
         data[key] = [(datetime.utcfromtimestamp(t), v) for t, v in rows]
     end_local = datetime.utcfromtimestamp(mx / 1000 + off)
-    return data, end_local
+
+    # Двери: непрерывная реконструкция состояния (затравка + перенос)
+    doors = {}
+    lo_s, mx_s = lo / 1000 + off, mx / 1000 + off
+    for aid, name in DOORS.items():
+        seed = con.execute(
+            f"select value from allh where a_id={aid} and c_id=15 and timestamp<{lo} "
+            f"order by timestamp desc limit 1").fetchone()
+        state = int(seed[0]) if seed else 0
+        evs = con.execute(
+            f"select (timestamp/1000+{off}) ts, value from allh "
+            f"where a_id={aid} and c_id=15 and timestamp>{lo} order by timestamp").fetchall()
+        iv, cur = [], (lo_s if state == 1 else None)
+        for t, v in evs:
+            v = int(v)
+            if v == 1 and cur is None:
+                cur = t
+            elif v == 0 and cur is not None:
+                iv.append((cur, t)); cur = None
+        if cur is not None:
+            iv.append((cur, mx_s))
+        merged = []
+        for a0, b0 in iv:                       # склеить разрывы < 90 c
+            if merged and a0 - merged[-1][1] <= 90:
+                merged[-1] = (merged[-1][0], b0)
+            else:
+                merged.append((a0, b0))
+        if merged:
+            doors[name] = [(datetime.utcfromtimestamp(a0), datetime.utcfromtimestamp(b0))
+                           for a0, b0 in merged]
+    return data, end_local, doors
 
 
 def parse_hm(day, hm):
@@ -97,7 +136,7 @@ def parse_hm(day, hm):
     return day.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
 
 
-def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to):
+def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -118,6 +157,17 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to):
     ax.axhspan(CORRIDOR[0], CORRIDOR[1], color="#33cc88", alpha=0.10, zorder=0)
     ax.axhline(TARGET, color="#199e70", ls="--", lw=1.3, zorder=2, label=f"цель {TARGET}°")
 
+    # подсветка «дверь открыта» (интервалы > 2 мин)
+    if doors:
+        first = True
+        for name, iv in doors.items():
+            for a0, b0 in iv:
+                if (b0 - a0).total_seconds() < 120:
+                    continue
+                ax.axvspan(a0, b0, color="#e07a2c", alpha=0.16, zorder=1,
+                           label=("дверь открыта" if first else None))
+                first = False
+
     ox, oy = xy("out");    ax.plot(ox, oy, color="#5a8f3c", lw=1.8, label="улица")
     cx, cy = xy("ac_cur"); ax.plot(cx, cy, color="#d8742a", lw=1.2, alpha=.8, label="датчик кондея (внутр.)")
     tx, tv = xy("ac_tgt"); ax.step(tx, tv, where="post", color="#b5611f", lw=1.5, ls=(0, (5, 2)), label="целевая кондея")
@@ -131,8 +181,8 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to):
 
     af = ax.twinx()
     fx, fv = xy("ac_fan")
-    af.step(fx, fv, where="post", color="#9a7bbf", lw=1.3, alpha=.85, label="вентилятор (0–3)")
-    af.set_ylim(0, 12); af.set_yticks([0, 1, 2, 3])
+    af.step(fx, fv, where="post", color="#9a7bbf", lw=1.3, alpha=.85, label="вентилятор (0–5)")
+    af.set_ylim(0, 20); af.set_yticks([0, 1, 2, 3, 4, 5])
     af.set_ylabel("вентилятор", color="#5f2d80"); af.tick_params(axis="y", labelcolor="#5f2d80")
 
     day = end_local if end_local.hour >= 6 else end_local - timedelta(days=1)
@@ -201,6 +251,19 @@ def print_options(opts, full=True):
                 o.get("fanTempStep"), tag))
 
 
+def print_doors(doors, win_lo, win_hi):
+    if not doors:
+        return
+    tot = max(1.0, (win_hi - win_lo).total_seconds())
+    for name, iv in doors.items():
+        op = 0.0
+        for a0, b0 in iv:
+            s = max(a0, win_lo); e = min(b0, win_hi)
+            if e > s:
+                op += (e - s).total_seconds()
+        print("%s: открыта %d%% окна (~%d мин)" % (name, round(100 * op / tot), round(op / 60)))
+
+
 def main():
     p = argparse.ArgumentParser(description="Суточный график термостата Sprut.Hub из DevInfo")
     p.add_argument("--downloads", default=os.path.expanduser("~/Downloads"))
@@ -221,18 +284,19 @@ def main():
     if a.options:
         print_options(load_scenario_options(zip_path), full=True)
         return
-    data, end_local = load_history(zip_path, a.hours, want_list=a.list)
+    data, end_local, doors = load_history(zip_path, a.hours, want_list=a.list)
     if a.list:
         return
     try:
         print_options(load_scenario_options(zip_path), full=False)
     except Exception:
         pass
+    print_doors(doors, end_local - timedelta(hours=a.hours), end_local)
     stamp = end_local.strftime("%Y-%m-%d")
     outdir = a.outdir or os.path.join(os.getcwd(), "charts")
     os.makedirs(outdir, exist_ok=True)
     out = a.out or os.path.join(outdir, f"vt_last24h_{stamp}.png")
-    build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to)
+    build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to, doors=doors)
 
 
 if __name__ == "__main__":
