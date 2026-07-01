@@ -73,6 +73,11 @@ def load_history(zip_path, hours, want_list=False):
     if not os.path.exists(db) and not segs:
         sys.exit("В архиве нет истории (External/Bridges/History/1). Это точно DevInfo, а не логи?")
     con = duckdb.connect()
+    # ВАЖНО: фиксируем UTC. История фильтруется ПО СЫРЫМ мс (timestamp>{lo}), а НЕ через
+    # to_timestamp(...)+сравнение с датой-строкой — иначе не-UTC сессия DuckDB сдвигает
+    # границы и режет события (был баг: вечерние закрытия двери «терялись»). В локальное
+    # время конвертируем только в Python (datetime.utcfromtimestamp(ts/1000+off)).
+    con.execute("SET TimeZone='UTC'")
     parts = []
     if os.path.exists(db):
         con.execute("attach '%s' as h (read_only)" % db)
