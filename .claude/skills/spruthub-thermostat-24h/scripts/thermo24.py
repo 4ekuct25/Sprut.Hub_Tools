@@ -161,7 +161,8 @@ def main():
     p.add_argument("--ymax", type=float, default=29.0)
     p.add_argument("--from", dest="x_from", default=None, help="начало окна, напр. 08:00")
     p.add_argument("--to", dest="x_to", default=None, help="конец окна, напр. 20:00")
-    p.add_argument("--out", default=None)
+    p.add_argument("--outdir", default=None, help="папка для PNG (по умолчанию ./charts)")
+    p.add_argument("--out", default=None, help="полный путь PNG (переопределяет --outdir)")
     p.add_argument("--list", action="store_true", help="показать доступные потоки и выйти")
     a = p.parse_args()
 
@@ -171,7 +172,9 @@ def main():
     if a.list:
         return
     stamp = end_local.strftime("%Y-%m-%d")
-    out = a.out or os.path.join(a.downloads, f"Термостат_Гостиная_единый_{stamp}.png")
+    outdir = a.outdir or os.path.join(os.getcwd(), "charts")
+    os.makedirs(outdir, exist_ok=True)
+    out = a.out or os.path.join(outdir, f"vt_last24h_{stamp}.png")
     build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to)
 
 
