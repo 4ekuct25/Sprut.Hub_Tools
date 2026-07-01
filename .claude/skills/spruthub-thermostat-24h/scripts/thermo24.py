@@ -44,6 +44,10 @@ DOORS = {
     # 5:  "дверь коридор",
     # 24: "дверь Саша",
 }
+# Агрегация состояния двери для подсветки: бьём на бакеты и красим бакет «открыто»,
+# если дверь была открыта >= DOOR_OPEN_THRESH доли времени бакета (схлопывает дёрганья).
+DOOR_BUCKET_MIN = 30     # размер бакета, мин
+DOOR_OPEN_THRESH = 0.5   # доля открытого времени в бакете, чтобы считать «открыто»
 
 # Прод-уставки термостата (для коридора/цели на графике)
 TARGET = 24.3
@@ -136,7 +140,40 @@ def parse_hm(day, hm):
     return day.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
 
 
-def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None):
+def door_open_buckets(intervals, bucket_min, thresh):
+    """Схлопнуть события двери в бакеты: вернуть интервалы, где дверь была открыта
+    >= thresh доли бакета. Частые открыл/закрыл превращаются в основное состояние."""
+    if not intervals:
+        return []
+    step = timedelta(minutes=bucket_min)
+    lo = min(a for a, _ in intervals)
+    hi = max(b for _, b in intervals)
+    grid0 = lo.replace(hour=0, minute=0, second=0, microsecond=0)
+    k = int((lo - grid0).total_seconds() // (bucket_min * 60))
+    t = grid0 + k * step
+    buckets = []
+    while t < hi:
+        b0, b1 = t, t + step
+        span = (b1 - b0).total_seconds()
+        op = 0.0
+        for a, b in intervals:
+            s = max(a, b0); e = min(b, b1)
+            if e > s:
+                op += (e - s).total_seconds()
+        if span > 0 and op / span >= thresh:
+            buckets.append((b0, b1))
+        t = b1
+    merged = []
+    for a, b in buckets:                       # склеить соседние «открытые» бакеты
+        if merged and a <= merged[-1][1] + timedelta(seconds=1):
+            merged[-1] = (merged[-1][0], b)
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None,
+                door_bucket=DOOR_BUCKET_MIN, door_thresh=DOOR_OPEN_THRESH):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -157,15 +194,13 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None):
     ax.axhspan(CORRIDOR[0], CORRIDOR[1], color="#33cc88", alpha=0.10, zorder=0)
     ax.axhline(TARGET, color="#199e70", ls="--", lw=1.3, zorder=2, label=f"цель {TARGET}°")
 
-    # подсветка «дверь открыта» (интервалы > 2 мин)
+    # подсветка «дверь открыта» — агрегированно по бакетам (основное состояние)
     if doors:
         first = True
         for name, iv in doors.items():
-            for a0, b0 in iv:
-                if (b0 - a0).total_seconds() < 120:
-                    continue
+            for a0, b0 in door_open_buckets(iv, door_bucket, door_thresh):
                 ax.axvspan(a0, b0, color="#e07a2c", alpha=0.16, zorder=1,
-                           label=("дверь открыта" if first else None))
+                           label=(f"дверь: преим. открыта (бакет {door_bucket}м)" if first else None))
                 first = False
 
     ox, oy = xy("out");    ax.plot(ox, oy, color="#5a8f3c", lw=1.8, label="улица")
@@ -275,6 +310,10 @@ def main():
     p.add_argument("--to", dest="x_to", default=None, help="конец окна, напр. 20:00")
     p.add_argument("--outdir", default=None, help="папка для PNG (по умолчанию ./charts)")
     p.add_argument("--out", default=None, help="полный путь PNG (переопределяет --outdir)")
+    p.add_argument("--door-bucket", type=int, default=DOOR_BUCKET_MIN,
+                   help="агрегация двери: размер бакета в минутах (по умолч. 30)")
+    p.add_argument("--door-thresh", type=float, default=DOOR_OPEN_THRESH,
+                   help="доля открытого времени в бакете для метки 'открыто' (0..1, по умолч. 0.5)")
     p.add_argument("--list", action="store_true", help="показать доступные потоки и выйти")
     p.add_argument("--options", action="store_true", help="показать живые опции сценария и выйти")
     a = p.parse_args()
@@ -296,7 +335,8 @@ def main():
     outdir = a.outdir or os.path.join(os.getcwd(), "charts")
     os.makedirs(outdir, exist_ok=True)
     out = a.out or os.path.join(outdir, f"vt_last24h_{stamp}.png")
-    build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to, doors=doors)
+    build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to, doors=doors,
+                door_bucket=a.door_bucket, door_thresh=a.door_thresh)
 
 
 if __name__ == "__main__":
