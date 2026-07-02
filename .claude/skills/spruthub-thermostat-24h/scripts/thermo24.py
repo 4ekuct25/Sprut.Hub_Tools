@@ -62,7 +62,15 @@ def find_latest_devinfo(folder):
     return max(cands, key=os.path.getmtime)
 
 
-def load_history(zip_path, hours, want_list=False):
+def open_history(zip_path):
+    """Распаковать DevInfo во СВЕЖУЮ временную папку (tempfile.mkdtemp — уникальное имя каждый
+    раз; НЕ переиспользовать фиксированный путь в маунте: `rm -rf` там может не сработать и
+    прочитаются УСТАРЕВШИЕ данные) и вернуть готовое duckdb-соединение с UTC-таймзоной и вью
+    `allh` (union history.duckdb+wal и всех parquet-сегментов).
+
+    Для ad-hoc анализа: `con = thermo24.open_history(zip)`; фильтровать по СЫРЫМ мс
+    (`where timestamp>{lo_ms}`), в локаль конвертить в Python: `utcfromtimestamp(ts/1000+off)`.
+    """
     import duckdb
     tmp = tempfile.mkdtemp(prefix="devinfo_")
     with zipfile.ZipFile(zip_path) as z:
@@ -71,13 +79,9 @@ def load_history(zip_path, hours, want_list=False):
     db = os.path.join(base, "history.duckdb")
     segs = sorted(glob.glob(os.path.join(base, "segments", "*", "*", "*.parquet")))
     if not os.path.exists(db) and not segs:
-        sys.exit("В архиве нет истории (External/Bridges/History/1). Это точно DevInfo, а не логи?")
+        raise RuntimeError("В архиве нет истории (External/Bridges/History/1). Это точно DevInfo, а не логи?")
     con = duckdb.connect()
-    # ВАЖНО: фиксируем UTC. История фильтруется ПО СЫРЫМ мс (timestamp>{lo}), а НЕ через
-    # to_timestamp(...)+сравнение с датой-строкой — иначе не-UTC сессия DuckDB сдвигает
-    # границы и режет события (был баг: вечерние закрытия двери «терялись»). В локальное
-    # время конвертируем только в Python (datetime.utcfromtimestamp(ts/1000+off)).
-    con.execute("SET TimeZone='UTC'")
+    con.execute("SET TimeZone='UTC'")   # см. док-стринг: фильтр по сырым мс, не по датам-строкам
     parts = []
     if os.path.exists(db):
         con.execute("attach '%s' as h (read_only)" % db)
@@ -86,6 +90,14 @@ def load_history(zip_path, hours, want_list=False):
         pq = "', '".join(segs)
         parts.append("select timestamp,a_id,s_id,c_id,value from read_parquet(['%s'])" % pq)
     con.execute("create view allh as " + " union all ".join(parts))
+    return con
+
+
+def load_history(zip_path, hours, want_list=False):
+    try:
+        con = open_history(zip_path)
+    except RuntimeError as e:
+        sys.exit(str(e))
     mx = con.execute("select max(timestamp) from allh").fetchone()[0]
     lo = mx - hours * 3600 * 1000
 
