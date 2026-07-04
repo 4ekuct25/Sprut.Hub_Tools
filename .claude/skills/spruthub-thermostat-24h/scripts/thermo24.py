@@ -254,31 +254,51 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None,
     print("saved", out_png)
 
 
+def _parse_option_blocks(raw):
+    """Достаёт термостат-конфиги (с ключом fanTempStep) из сырого SprutHub.data.
+    HSQLDB хранит и старые записи — по каждому датчику берём ПОСЛЕДНЮЮ (самую свежую)."""
+    latest = {}
+    order = []
+    for b in re.findall(r'\{[^{}]*?"fanTempStep"[^{}]*?\}', raw):
+        try:
+            o = json.loads(b)
+        except Exception:
+            continue
+        key = o.get("sensor", "?")
+        if key not in latest:
+            order.append(key)
+        latest[key] = o          # перезапись → остаётся последний блок
+    return [latest[k] for k in order]
+
+
 def load_scenario_options(zip_path):
-    """Живые опции сценария из DevInfo: SQL/SprutHub/Recover/*.tar.gz -> SprutHub.data.
-    Возвращает список dict'ов (по одному на термостат-конфиг с ключом fanTempStep)."""
+    """Живые опции сценария из DevInfo. Читаем ЖИВОЙ SQL/SprutHub/SprutHub.data
+    (а не периодический Recover — он отстаёт и показывает старые значения после правки).
+    Фолбэк на свежайший Recover, если живого файла нет."""
     tmp = tempfile.mkdtemp(prefix="devopt_")
+    live = None
     with zipfile.ZipFile(zip_path) as z:
         for n in z.namelist():
-            if "/Recover/" in n and n.endswith(".tar.gz"):
+            if n.endswith("SprutHub.data") and "/Recover/" not in n:
+                live = z.extract(n, tmp)
+            elif "/Recover/" in n and n.endswith(".tar.gz"):
                 z.extract(n, tmp)
+    if live and os.path.exists(live):
+        raw = open(live, "rb").read().decode("latin-1", "ignore")
+        blocks = _parse_option_blocks(raw)
+        if blocks:
+            return blocks
+    # фолбэк: свежайший Recover-снимок
     recs = sorted(glob.glob(os.path.join(tmp, "**", "Recover", "*.tar.gz"), recursive=True))
     if not recs:
         return []
     rt = tempfile.mkdtemp()
-    with tarfile.open(recs[-1]) as t:      # последний по имени = свежайший снимок
+    with tarfile.open(recs[-1]) as t:
         t.extractall(rt)
     cand = glob.glob(os.path.join(rt, "**", "SprutHub.data"), recursive=True)
     if not cand:
         return []
-    raw = open(cand[0], "rb").read().decode("latin-1", "ignore")
-    out = []
-    for b in re.findall(r'\{[^{}]*?"fanTempStep"[^{}]*?\}', raw):
-        try:
-            out.append(json.loads(b))
-        except Exception:
-            pass
-    return out
+    return _parse_option_blocks(open(cand[0], "rb").read().decode("latin-1", "ignore"))
 
 
 def print_options(opts, full=True):
