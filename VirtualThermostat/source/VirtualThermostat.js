@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.11.0-ac",
+    version: "3.11.1-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1505,8 +1505,15 @@ function updateAcFanSpeed(service, variables, options) {
 
         const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
         const currentState = currentStateChar ? currentStateChar.getValue() : 0
-        if (currentState == 0) {
-            // Кондиционер выключен — вентилятор не трогаем
+        // При простое (currentState==0) кондей бывает в двух состояниях:
+        //  • полностью выключен — вентилятор не трогаем;
+        //  • «удержание у цели» (acFanOnlyAtTarget/acModulateAtTarget) — питание включено,
+        //    вентилятор реально крутится. Тогда опускаем его до минимальной (тихой) скорости,
+        //    а не оставляем последнюю скорость охлаждения (иначе кондей «гудит» на Медленно).
+        const acHolding = currentState == 0 &&
+            isFanOnlyActive(service, options, toNum(getCharValue(service, HC.TargetHeatingCoolingState)), variables)
+        if (currentState == 0 && !acHolding) {
+            // Кондиционер полностью выключен — вентилятор не трогаем
             return
         }
 
@@ -1531,12 +1538,19 @@ function updateAcFanSpeed(service, variables, options) {
             return
         }
 
-        const computed = computeFanSpeedByDiff(service, options)
-        if (computed == null) {
-            return
+        let computed
+        if (acHolding) {
+            // Холостой обдув у цели — минимальная (тихая) скорость, не по разнице температур
+            computed = { speed: 1, diff: 0, step: toNum(options.fanTempStep) || 0.5 }
+        } else {
+            computed = computeFanSpeedByDiff(service, options)
+            if (computed == null) {
+                return
+            }
         }
 
-        variables.acLastSetFanSpeed = applyFanSpeed(acFanChar, computed, "Вентилятор кондиционера", false, options)
+        const acFanLabel = acHolding ? "Вентилятор кондиционера (удержание у цели)" : "Вентилятор кондиционера"
+        variables.acLastSetFanSpeed = applyFanSpeed(acFanChar, computed, acFanLabel, false, options)
     } catch (e) {
         logError("Ошибка обновления скорости вентилятора кондиционера: " + e.toString())
     }

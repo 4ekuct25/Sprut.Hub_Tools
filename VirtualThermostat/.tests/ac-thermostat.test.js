@@ -1086,6 +1086,31 @@ describe('AC §"Вентилятор без компрессора (acFanOnlyAtT
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(28);
   });
 
+  it('удержание у цели → скорость вентилятора кондея опускается до минимальной (Тихо/1), а не остаётся с охлаждения', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
+    // Кондей в удержании, вентилятор ещё на 5 (осталось с фазы охлаждения)
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, fanSpeed: 5, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: true });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(ac.char(HS.Fan, HC.On).getValue()).toBe(true);            // питание держится
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(1); // но вентилятор — Тихо
+  });
+
+  it('кондей ПОЛНОСТЬЮ выключен (обдув выкл, цель достигнута) → скорость вентилятора не трогаем', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 24.0, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 17, currentTemp: 26, fanSpeed: 3, withPower: true, power: true });
+    const vars = freshVars();
+    const options = baseOptions({ acThermostat: acUUID(ac), acPowerSwitch: acPowerUUID(ac), acFanOnlyAtTarget: false });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    // Обдув выкл → кондей глохнет полностью; скорость вентилятора сценарий не переустанавливает
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(3);
+  });
+
   // Гистерезис обдува. Цель 24, гистерезис 0.5 → порог запуска 23.5, порог удержания 23.0.
   it('ЗАПУСК: кондей выключен, комната ниже коридора (23.2 < 23.5) → обдув НЕ запускается сам', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 0, 2, { currentTemp: 23.2, targetTemp: 24 });
