@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.11.1-ac",
+    version: "3.11.2-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1402,6 +1402,14 @@ function updateFanSpeed(service, variables, options) {
 // Вычисляет скорость вентилятора (1..5) по разнице текущей и целевой температур.
 // 0 до step - скорость 1, step до 2*step - 2, 2*step до 3*step - 3, и т.д.
 // Возвращает null, если температуры неизвестны.
+//
+// Разница берётся ПО НАПРАВЛЕНИЮ режима, а не по модулю:
+//  • охлаждение (currentState=2) — насколько комната ВЫШЕ цели;
+//  • нагрев (currentState=1) — насколько НИЖЕ.
+// Если комната проскочила за цель (при охлаждении стала ниже цели / при нагреве выше),
+// разница считается 0 → минимальная скорость. Иначе вентилятор раздувал бы остаточный
+// холод/тепло змеевика и усиливал проскок за цель (по модулю 0.1° ниже цели давало
+// скорость 2, хотя охлаждать уже не нужно). Для неизвестного режима — прежний модуль.
 function computeFanSpeedByDiff(service, options) {
     const currentTemp = getCharValue(service, HC.CurrentTemperature)
     const targetTemp = getCharValue(service, HC.TargetTemperature)
@@ -1409,7 +1417,17 @@ function computeFanSpeedByDiff(service, options) {
         return null
     }
     const fanTempStep = options.fanTempStep || 0.5
-    const diff = Math.abs(currentTemp - targetTemp)
+    const currentStateChar = service.getCharacteristic(HC.CurrentHeatingCoolingState)
+    const currentState = currentStateChar ? toNum(currentStateChar.getValue()) : null
+    let signed
+    if (currentState == 2) {
+        signed = currentTemp - targetTemp        // охлаждение: положительно, когда комната выше цели
+    } else if (currentState == 1) {
+        signed = targetTemp - currentTemp        // нагрев: положительно, когда комната ниже цели
+    } else {
+        signed = Math.abs(currentTemp - targetTemp)  // режим неизвестен — прежнее поведение
+    }
+    const diff = signed > 0 ? signed : 0
 
     let speed = 1
     if (diff >= 4 * fanTempStep) {

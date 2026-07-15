@@ -257,6 +257,25 @@ describe('AC §"Вентилятор кондиционера"', () => {
     expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(2);
   });
 
+  it('охлаждение, комната ушла НИЖЕ цели (переохлаждение) → скорость 1, не наращиваем', ({ hub, scenario }) => {
+    // Комната 23.8 < цель 24: по модулю разница 0.2 дала бы скорость >1, но охлаждать уже не нужно
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 23.8, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { fanSpeed: 4 });
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), fanTempStep: 0.1 }), freshVars(), 2);
+
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(1);
+  });
+
+  it('нагрев, комната ушла ВЫШЕ цели (перегрев) → скорость 1, не наращиваем', ({ hub, scenario }) => {
+    const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 22.5, targetTemp: 22 });
+    const ac = makeAc(hub, 20, { fanSpeed: 3 });
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), fanTempStep: 0.1 }), freshVars(), 1);
+
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(1);
+  });
+
   it('acFanControl=false → вентилятор не трогаем', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { fanSpeed: 3 });
