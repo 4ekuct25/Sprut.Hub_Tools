@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.11.3-ac",
+    version: "3.11.4-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1032,7 +1032,10 @@ function computeSmoothAcTemp(ac, state, service, options) {
     let anticipate = toNum(options.acAnticipate)
     if (anticipate == null || anticipate < 0) anticipate = 0
     const goalEff = anticipate > 0 ? (toNum(state) == 1 ? goal - anticipate : goal + anticipate) : goal
-    const raw = acInternal + factor * (goalEff - ext)
+    // Огрубляем до SMOOTH_TEMP_DECIMALS: иначе эпсилон плавающей точки (цель+упреждение
+    // не равно ожидаемому числу) решает, требуется холод или нет, — см. константу.
+    const scale = Math.pow(10, SMOOTH_TEMP_DECIMALS)
+    const raw = Math.round((acInternal + factor * (goalEff - ext)) * scale) / scale
     // Округление не должно менять СМЫСЛ расчёта. Компрессор охлаждает, пока целевая ниже
     // собственного датчика кондея (при нагреве — выше). Если raw уже не ниже собственной,
     // спроса на холод нет — и Math.floor не имеет права превратить «простой» в «охлаждай»
@@ -1870,6 +1873,13 @@ const AC_STANDBY_TEMP_OFFSET = 2
 const AC_ECHO_WINDOW_MS = 30000
 // Максимум мягких переотправок команды внутри окна, после — ручной режим.
 const AC_REASSERT_MAX = 3
+// Знаков после запятой, до которых огрубляется расчёт плавной целевой перед округлением.
+// В JS 24.4 + 0.2 = 24.599999999999998, поэтому комната, стоящая РОВНО на цель+упреждение,
+// выглядела вышедшей за цель на 3.6e-15 — и целевая уходила на градус ниже собственного
+// датчика кондея, включая компрессор там, где он должен простаивать. Реальные величины
+// здесь не мельче 0.1° (шаг датчика 0.1, упреждения 0.1, силы 0.5), так что шесть знаков
+// гасят только артефакты и не трогают ни одной осмысленной разницы.
+const SMOOTH_TEMP_DECIMALS = 6
 // Список ВСЕХ сервисов (любого типа), имеющих хотя бы одну из указанных
 // характеристик. Используется для выбора выключателя кондиционера: тип сервиса
 // питания у разных интеграций свой (Fan, Switch, кастомные).

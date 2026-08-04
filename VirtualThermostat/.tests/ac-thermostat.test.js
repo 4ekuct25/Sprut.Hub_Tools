@@ -1057,6 +1057,29 @@ describe('AC §"Плавная целевая температура (acSmoothTa
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
   });
 
+  it('комната РОВНО на цель+упреждение → простой, эпсилон плавающей точки не включает компрессор', ({ hub, scenario }) => {
+    // Живой случай из лога 04.08 16:50:52: собств 25.0, комната 24.6, цель 24.4, упреждение 0.2.
+    // В JS 24.4 + 0.2 = 24.599999999999998, поэтому комната выглядела вышедшей за цель на 3.6e-15:
+    // raw = 24.999999999999993 → floor 24, то есть на градус НИЖЕ собств. 25 → компрессор ON.
+    // По контракту опции при «комната ≤ цель+упреждение» компрессор простаивает → целевая 25.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.6, targetTemp: 24.4 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 2, acAnticipate: 0.2 });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(25);
+  });
+
+  it('комната на 0.1° ВЫШЕ цель+упреждение → холод действительно нужен, целевая ниже собств.', ({ hub, scenario }) => {
+    // Контроль к предыдущему: сдвиг на один реальный шаг датчика должен ВЕРНУТЬ охлаждение,
+    // иначе огрубление до 6 знаков съело бы осмысленную разницу. Комната 24.7 при цели 24.4:
+    // raw = 25 + 2*(24.6-24.7) = 24.8 → ниже собств. 25 → floor 24 (компрессор тянет).
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.7, targetTemp: 24.4 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 25 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 2, acAnticipate: 0.2 });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
   it('когда холод реально нужен, floor по-прежнему тянет ВНИЗ (размен 3.9.3-ac не сломан)', ({ hub, scenario }) => {
     // Комната ВЫШЕ цели: собств 25.5, комната 24.5, цель 24, сила 2 → raw = 25.5 + 2*(24-24.5) = 24.5
     // raw НИЖЕ собств. 25.5 → холод востребован → floor 24, а не 25. Защита у цели не вмешивается.
