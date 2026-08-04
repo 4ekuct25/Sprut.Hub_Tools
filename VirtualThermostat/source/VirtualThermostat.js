@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.11.2-ac",
+    version: "3.11.3-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1017,11 +1017,12 @@ function computeSmoothAcTemp(ac, state, service, options) {
     // Требуем от кондиционера сместить его собственное показание на отставание
     // комнаты (по внешнему датчику) от цели, умноженное на «Силу плавного режима».
     // Работает и для нагрева, и для охлаждения. Шаг кондиционера — 1°C.
-    // Округляем в сторону более сильной коррекции: при охлаждении — ВНИЗ (холоднее),
-    // при нагреве — ВВЕРХ (теплее). Раньше был Math.round (ничьи .5 — вверх), из-за чего
-    // у пика жары целевая «съедала» полградуса и охлаждение недодавало (собств. 25.5 →
-    // целевая 25 при силе 2 = почти простой). Floor при охлаждении даёт целевую 24 и
-    // компрессор реально тянет вниз.
+    // Когда холод (тепло) реально требуется, округляем в сторону более сильной коррекции:
+    // при охлаждении — ВНИЗ (холоднее), при нагреве — ВВЕРХ (теплее). Раньше был Math.round
+    // (ничьи .5 — вверх), из-за чего у пика жары целевая «съедала» полградуса и охлаждение
+    // недодавало (собств. 25.5 → целевая 25 при силе 2 = почти простой). Floor при охлаждении
+    // даёт целевую 24 и компрессор реально тянет вниз. Но у самой цели, где расчёт говорит
+    // «компрессор не нужен», это же округление работало против смысла — см. ниже.
     let factor = toNum(options.acSmoothFactor)
     if (factor == null || factor < 1) factor = 1
     // Упреждение (acAnticipate): глушим компрессор не у самой цели, а на запас ВЫШЕ цели
@@ -1032,7 +1033,16 @@ function computeSmoothAcTemp(ac, state, service, options) {
     if (anticipate == null || anticipate < 0) anticipate = 0
     const goalEff = anticipate > 0 ? (toNum(state) == 1 ? goal - anticipate : goal + anticipate) : goal
     const raw = acInternal + factor * (goalEff - ext)
-    const result = toNum(state) == 1 ? Math.ceil(raw) : Math.floor(raw)
+    // Округление не должно менять СМЫСЛ расчёта. Компрессор охлаждает, пока целевая ниже
+    // собственного датчика кондея (при нагреве — выше). Если raw уже не ниже собственной,
+    // спроса на холод нет — и Math.floor не имеет права превратить «простой» в «охлаждай»
+    // (собств. 23.5, raw 23.9 → floor 23 < 23.5 = компрессор ON, хотя расчёт говорил «стой»;
+    // так терялось до 0.9° запаса и комната уходила ниже цели). В этом случае берём
+    // минимальную целую целевую, которая всё ещё НЕ ниже собственной. Когда холод реально
+    // нужен (raw ниже собственной) — округляем ВНИЗ, как и раньше: тянем сильнее (3.9.3-ac).
+    const result = toNum(state) == 1
+        ? (raw <= acInternal ? Math.min(Math.ceil(raw), Math.floor(acInternal)) : Math.ceil(raw))
+        : (raw >= acInternal ? Math.max(Math.floor(raw), Math.ceil(acInternal)) : Math.floor(raw))
     const goalLog = anticipate > 0 ? `${goalEff} (цель ${goal} + упрежд. ${anticipate})` : `${goal}`
     logDebug(`Плавная целевая: собств.${acInternal} + сила ${factor}·(цель ${goalLog} − комната ${ext}) = ${result}°C`, service.getCharacteristic(HC.CurrentTemperature), options.debug)
     return result

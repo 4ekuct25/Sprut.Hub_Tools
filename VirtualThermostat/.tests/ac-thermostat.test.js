@@ -1034,6 +1034,39 @@ describe('AC §"Плавная целевая температура (acSmoothTa
     expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
   });
 
+  it('у цели округление не опускает целевую НИЖЕ собств. — «простой» не превращается в «охлаждай»', ({ hub, scenario }) => {
+    // Живой случай из лога 04.08: собств 23.5, комната 24.4, цель 24.4, сила 2, упреждение 0.2.
+    // raw = 23.5 + 2*(24.6-24.4) = 23.9 — ВЫШЕ собств. 23.5, то есть «компрессор не нужен».
+    // Прежний floor давал 23 (< 23.5 → компрессор ON) и утягивал комнату ниже цели.
+    // Теперь целевая 24 — минимальная целая, которая всё ещё не ниже собств.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.4, targetTemp: 24.4 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 23.5 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 2, acAnticipate: 0.2 });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
+  it('нагрев симметрично: у цели округление не поднимает целевую ВЫШЕ собств.', ({ hub, scenario }) => {
+    // собств 24.5, комната 23.6, цель 23.6, сила 2, упреждение 0.2 → цель_эфф 23.4
+    // raw = 24.5 + 2*(23.4-23.6) = 24.1 — НИЖЕ собств. 24.5, то есть греть не нужно.
+    // Прежний ceil дал бы 25 (> 24.5 → нагрев ON). Теперь 24 — не выше собств.
+    const t = makeThermostat(hub, 10, 1, 1, { currentTemp: 23.6, targetTemp: 23.6 });
+    const ac = makeAc(hub, 20, { targetState: 1, targetTemp: 24, currentTemp: 24.5 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 2, acAnticipate: 0.2 });
+    runTrigger(scenario, t, options, freshVars(), 1);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
+  it('когда холод реально нужен, floor по-прежнему тянет ВНИЗ (размен 3.9.3-ac не сломан)', ({ hub, scenario }) => {
+    // Комната ВЫШЕ цели: собств 25.5, комната 24.5, цель 24, сила 2 → raw = 25.5 + 2*(24-24.5) = 24.5
+    // raw НИЖЕ собств. 25.5 → холод востребован → floor 24, а не 25. Защита у цели не вмешивается.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.5, targetTemp: 24 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 26, currentTemp: 25.5 });
+    const options = baseOptions({ acThermostat: acUUID(ac), acSmoothTarget: true, acSmoothFactor: 2 });
+    runTrigger(scenario, t, options, freshVars(), 2);
+    expect(ac.char(HS.Thermostat, HC.TargetTemperature).getValue()).toBe(24);
+  });
+
   it('антиспам: мелкая подстройка в течение 2 минут откладывается, скачок ≥2° проходит', ({ hub, scenario, time }) => {
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { targetState: 0, targetTemp: 24, currentTemp: 28 });
