@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Секреты и credentials
+*.env
+.env.*
+!.env.example
+secrets.json
+*.pem
+*.key
+credentials*
+
+# Дампы и бэкапы
+*.sql
+*.bak
+*.bak.*
+
+# Локальные настройки редакторов
+.idea/workspace.xml
