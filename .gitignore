@@ -19,3 +19,7 @@ credentials*
 
 # Локальные настройки редакторов
 .idea/workspace.xml
+
+# Python
+__pycache__/
+*.pyc

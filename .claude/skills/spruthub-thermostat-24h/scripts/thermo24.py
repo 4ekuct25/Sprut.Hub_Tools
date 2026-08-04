@@ -93,22 +93,44 @@ def open_history(zip_path):
     return con
 
 
-def load_history(zip_path, hours, want_list=False):
+def parse_since(s, end_local):
+    """'YYYY-MM-DD' или 'DD.MM' -> локальный datetime начала суток. Год для 'DD.MM'
+    берётся от конца архива (с откатом на год назад, если дата ещё не наступила)."""
+    s = s.strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    if m:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r"^(\d{1,2})\.(\d{1,2})$", s)
+    if m:
+        d, mo = int(m.group(1)), int(m.group(2))
+        cand = datetime(end_local.year, mo, d)
+        return cand if cand <= end_local else datetime(end_local.year - 1, mo, d)
+    sys.exit("--since: ожидается YYYY-MM-DD или DD.MM, получено %r" % s)
+
+
+def load_history(zip_path, hours, want_list=False, since=None):
     try:
         con = open_history(zip_path)
     except RuntimeError as e:
         sys.exit(str(e))
     mx = con.execute("select max(timestamp) from allh").fetchone()[0]
-    lo = mx - hours * 3600 * 1000
+    if since:
+        end_l = datetime.utcfromtimestamp(mx / 1000 + TZ_OFFSET_HOURS * 3600)
+        start_l = parse_since(since, end_l)
+        hours = (end_l - start_l).total_seconds() / 3600
+        if hours <= 0:
+            sys.exit("--since %s позже конца архива (%s) — нечего показывать"
+                     % (since, end_l.strftime("%Y-%m-%d %H:%M")))
+    lo = mx - int(hours * 3600 * 1000)
 
     if want_list:
         rows = con.execute(f"""
             select a_id,s_id,c_id,count(*) n,round(min(value),2) vmin,round(max(value),2) vmax
             from allh where timestamp>{lo} group by 1,2,3 order by 1,2,3""").fetchall()
-        print("Потоки за последние %d ч (a_id s_id c_id | n | min..max):" % hours)
+        print("Потоки за последние %g ч (a_id s_id c_id | n | min..max):" % hours)
         for r in rows:
             print("  %3d %3d %3d | %5d | %6s .. %-6s" % (r[0], r[1], r[2], r[3], r[4], r[5]))
-        return None, mx, {}
+        return None, mx, {}, None
 
     off = TZ_OFFSET_HOURS * 3600
     data = {}
@@ -149,7 +171,7 @@ def load_history(zip_path, hours, want_list=False):
         if merged:
             doors[name] = [(datetime.utcfromtimestamp(a0), datetime.utcfromtimestamp(b0))
                            for a0, b0 in merged]
-    return data, end_local, doors
+    return data, end_local, doors, datetime.utcfromtimestamp(lo_s)
 
 
 def parse_hm(day, hm):
@@ -242,8 +264,24 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None,
     hi_x = parse_hm(day, x_to) if x_to else end_local
     ax.set_xlim(lo_x, hi_x)
     span_h = max(1, (hi_x - lo_x).total_seconds() / 3600)
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1 if span_h <= 14 else 2))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    # Многодневное окно: часовые метки в формате %H:%M сливаются в кашу и делают дни
+    # неразличимыми — переходим на суточные метки с датой и границами суток.
+    if span_h <= 14:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    elif span_h <= 36:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    else:
+        days = span_h / 24.0
+        step = 1 if days <= 10 else (2 if days <= 24 else 7)
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=step))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
+        ax.xaxis.set_minor_locator(mdates.DayLocator(interval=1))
+        for d in mdates.drange(lo_x.replace(hour=0, minute=0, second=0, microsecond=0),
+                               hi_x, timedelta(days=1)):
+            ax.axvline(mdates.num2date(d).replace(tzinfo=None), color="#c9c9c9",
+                       lw=0.6, ls=":", zorder=0)
 
     h1, l1 = ax.get_legend_handles_labels(); h2, l2 = af.get_legend_handles_labels()
     ax.legend(h1 + h2, l1 + l2, loc="upper left", fontsize=9, ncol=3, framealpha=.92)
@@ -341,6 +379,9 @@ def main():
     p.add_argument("--downloads", default=os.path.expanduser("~/Downloads"))
     p.add_argument("--zip", default=None, help="конкретный DevInfo zip (иначе берётся свежий)")
     p.add_argument("--hours", type=int, default=24)
+    p.add_argument("--since", default=None,
+                   help="начало окна датой: YYYY-MM-DD или DD.MM (локальное время). "
+                        "Считает --hours от этой даты до конца архива. Для многодневных обзоров")
     p.add_argument("--ymin", type=float, default=20.0)
     p.add_argument("--ymax", type=float, default=29.0)
     p.add_argument("--from", dest="x_from", default=None, help="начало окна, напр. 08:00")
@@ -360,18 +401,24 @@ def main():
     if a.options:
         print_options(load_scenario_options(zip_path), full=True)
         return
-    data, end_local, doors = load_history(zip_path, a.hours, want_list=a.list)
+    data, end_local, doors, start_local = load_history(zip_path, a.hours, want_list=a.list,
+                                                       since=a.since)
     if a.list:
         return
     try:
         print_options(load_scenario_options(zip_path), full=False)
     except Exception:
         pass
-    print_doors(doors, end_local - timedelta(hours=a.hours), end_local)
+    print_doors(doors, start_local, end_local)
+    print("окно: %s .. %s (%.1f сут)" % (start_local.strftime("%Y-%m-%d %H:%M"),
+                                         end_local.strftime("%Y-%m-%d %H:%M"),
+                                         (end_local - start_local).total_seconds() / 86400))
     stamp = end_local.strftime("%Y-%m-%d")
     outdir = a.outdir or os.path.join(os.getcwd(), "charts")
     os.makedirs(outdir, exist_ok=True)
-    out = a.out or os.path.join(outdir, f"vt_last24h_{stamp}.png")
+    default_name = (f"vt_{start_local.strftime('%m-%d')}_{stamp}.png" if a.since
+                    else f"vt_last24h_{stamp}.png")
+    out = a.out or os.path.join(outdir, default_name)
     build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to, doors=doors,
                 door_bucket=a.door_bucket, door_thresh=a.door_thresh)
 
