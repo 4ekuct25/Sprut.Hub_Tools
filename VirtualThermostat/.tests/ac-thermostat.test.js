@@ -313,6 +313,37 @@ describe('AC §"Вентилятор кондиционера"', () => {
     expect(vars.acFanSpeedManuallySet).toBe(true);
   });
 
+  it('кондей сам подкрутил скорость до той, что нужна сценарию → фиксации НЕТ', ({ hub, scenario }) => {
+    // Живой случай 05.08: в 14:14 сценарий поставил кондею 1, в 14:15 кондей сам поднял до 2
+    // (вне 30-секундного окна подавления), а в 14:27 сценарий сам захотел 2 — и сравнение
+    // «живое != память» объявило это ручным вмешательством, отключив управление на 21 час.
+    // Конфликта нет: кондей пришёл туда, куда мы и собирались. Фиксировать нечего.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.6, targetTemp: 24.4 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 24.5, fanSpeed: 2 });
+    const vars = freshVars();
+    vars.acLastSetFanSpeed = 1;                       // память сценария отстала
+    const options = baseOptions({ acThermostat: acUUID(ac), acFanControl: true, fanSpeedManualLock: true, fanTempStep: 0.2 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(vars.acFanSpeedManuallySet).toBe(false);
+    expect(vars.acLastSetFanSpeed).toBe(2);
+  });
+
+  it('пользователь поставил скорость, которой сценарий НЕ хочет → фиксация срабатывает', ({ hub, scenario }) => {
+    // Контроль к предыдущему: защита не должна проглотить настоящее вмешательство.
+    // Комната на цели → сценарию нужна минимальная скорость, а на кондее стоит 5 (Турбо).
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.4, targetTemp: 24.4 });
+    const ac = makeAc(hub, 20, { targetState: 2, targetTemp: 24, currentTemp: 24.5, fanSpeed: 5 });
+    const vars = freshVars();
+    vars.acLastSetFanSpeed = 1;
+    const options = baseOptions({ acThermostat: acUUID(ac), acFanControl: true, fanSpeedManualLock: true, fanTempStep: 0.2 });
+
+    runTrigger(scenario, t, options, vars, 2);
+
+    expect(vars.acFanSpeedManuallySet).toBe(true);
+  });
+
   it('пользователь вернул Авто (0) → фиксация снимается, сценарий снова управляет', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { fanSpeed: 0 });

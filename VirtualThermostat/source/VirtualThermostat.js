@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.11.4-ac",
+    version: "3.11.5-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1522,9 +1522,10 @@ function updateVirtualFanSpeed(service, variables, options) {
 // Управление скоростью вентилятора кондиционера по разнице температур
 // виртуального термостата. Работает, только если включена опция acFanControl
 // и у кондиционера есть характеристика C_FanSpeed.
-// Ручная фиксация: если текущее значение отличается от последнего установленного
-// сценарием — считаем, что скорость изменил пользователь (пультом или из интерфейса),
-// и не трогаем её (при включённой опции fanSpeedManualLock). Возврат в авто — установкой 0 (Авто).
+// Ручная фиксация: если текущее значение отличается и от последнего установленного
+// сценарием, и от того, которое сценарий сейчас хочет поставить, — считаем, что скорость
+// изменил пользователь (пультом или из интерфейса), и не трогаем её (при включённой опции
+// fanSpeedManualLock). Возврат в авто — установкой 0 (Авто).
 function updateAcFanSpeed(service, variables, options) {
     try {
         if (options.acFanControl != true) return
@@ -1550,25 +1551,8 @@ function updateAcFanSpeed(service, variables, options) {
 
         const acCurrentSpeed = toNum(acFanChar.getValue())
 
-        // Пользователь вернул Авто (0) — снимаем фиксацию
-        if (acCurrentSpeed == 0 && toNum(acFanChar.getMinValue()) == 0) {
-            if (variables.acFanSpeedManuallySet) {
-                logDebug(`Вентилятор кондиционера: пользователь поставил Авто (0) — снимаем фиксацию`, acFanChar, options.debug)
-                variables.acFanSpeedManuallySet = false
-            }
-        } else if (variables.acLastSetFanSpeed != null && acCurrentSpeed != toNum(variables.acLastSetFanSpeed)) {
-            // Значение изменилось не сценарием — ручное вмешательство
-            if (options.fanSpeedManualLock == true && !variables.acFanSpeedManuallySet) {
-                logDebug(`Вентилятор кондиционера: скорость ${acCurrentSpeed} установлена вручную — фиксируем`, acFanChar, options.debug)
-                variables.acFanSpeedManuallySet = true
-            }
-        }
-
-        if (variables.acFanSpeedManuallySet) {
-            logDebug(`Вентилятор кондиционера зафиксирован пользователем — пропуск. Поставьте Авто (0), чтобы вернуть автоматический режим.`, acFanChar, options.debug)
-            return
-        }
-
+        // Скорость, которой сценарий сейчас добивается. Считаем ДО решения о фиксации:
+        // без неё расхождение с памятью неотличимо от «кондей сам пришёл туда, куда мы и хотели».
         let computed
         if (acHolding) {
             // Холостой обдув у цели — минимальная (тихая) скорость, не по разнице температур
@@ -1578,6 +1562,36 @@ function updateAcFanSpeed(service, variables, options) {
             if (computed == null) {
                 return
             }
+        }
+        const desiredSpeed = clampSpeedToChar(acFanChar, computed.speed)
+
+        // Пользователь вернул Авто (0) — снимаем фиксацию
+        if (acCurrentSpeed == 0 && toNum(acFanChar.getMinValue()) == 0) {
+            if (variables.acFanSpeedManuallySet) {
+                logDebug(`Вентилятор кондиционера: пользователь поставил Авто (0) — снимаем фиксацию`, acFanChar, options.debug)
+                variables.acFanSpeedManuallySet = false
+            }
+        } else if (variables.acLastSetFanSpeed != null && acCurrentSpeed != toNum(variables.acLastSetFanSpeed)) {
+            // Значение отличается от последнего установленного сценарием. Само по себе это
+            // ещё НЕ ручное вмешательство: кондиционер (VIOMI) правит свою скорость и сам,
+            // спустя минуту после нашей команды — то есть заведомо вне окна подавления, и
+            // отличить его от человека сравнением с памятью невозможно. Контекст события
+            // здесь недоступен: подписки Hub отдают только (источник, значение), а context
+            // приходит лишь в trigger, который срабатывает на сервисе термостата, не кондея.
+            // Поэтому решаем по НАМЕРЕНИЮ, без опоры на память: если живая скорость совпала
+            // с той, которую мы и собираемся поставить, спорить не о чем — конфликта нет.
+            if (acCurrentSpeed == desiredSpeed) {
+                logDebug(`Вентилятор кондиционера: скорость ${acCurrentSpeed} пришла не от сценария, но совпала с желаемой — не фиксируем`, acFanChar, options.debug)
+                variables.acLastSetFanSpeed = acCurrentSpeed
+            } else if (options.fanSpeedManualLock == true && !variables.acFanSpeedManuallySet) {
+                logDebug(`Вентилятор кондиционера: скорость ${acCurrentSpeed} установлена вручную (ожидалась ${desiredSpeed}) — фиксируем`, acFanChar, options.debug)
+                variables.acFanSpeedManuallySet = true
+            }
+        }
+
+        if (variables.acFanSpeedManuallySet) {
+            logDebug(`Вентилятор кондиционера зафиксирован пользователем — пропуск. Поставьте Авто (0), чтобы вернуть автоматический режим.`, acFanChar, options.debug)
+            return
         }
 
         const acFanLabel = acHolding ? "Вентилятор кондиционера (удержание у цели)" : "Вентилятор кондиционера"
