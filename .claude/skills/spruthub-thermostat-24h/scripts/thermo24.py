@@ -339,6 +339,11 @@ def load_scenario_options(zip_path):
     return _parse_option_blocks(open(cand[0], "rb").read().decode("latin-1", "ignore"))
 
 
+def is_configured(o):
+    """Блок относится к реально настроенному экземпляру сценария (выбран датчик)."""
+    return bool(str(o.get("sensor", "")).strip())
+
+
 def print_options(opts, full=True):
     if not opts:
         print("опции сценария: не найдены в DevInfo (нет Recover/SprutHub.data)")
@@ -348,17 +353,29 @@ def print_options(opts, full=True):
             "acModulateAtTarget", "acFanOnlyAtTarget", "acFanControl",
             "fanSpeedManualLock", "emulateThermostat", "failureBehavior",
             "failureTimeout", "debug", "sensor", "acThermostat", "acPowerSwitch"]
-    for o in opts:
-        tag = f"датчик {o.get('sensor','?')} / кондей {o.get('acThermostat','?')}"
-        if full:
-            print(f"\n=== Опции сценария ({tag}) ===")
-            for k in keys:
-                if k in o:
-                    print(f"  {k:18} = {o[k]}")
-        else:
-            print("опции: гистерезис %s, сила %s, упреждение %s, fanTempStep %s  (%s)" % (
+    # В SprutHub.data лежит и незаполненная заготовка сценария (пустой sensor) с
+    # ДЕФОЛТНЫМИ значениями. Она неотличима на вид от рабочих настроек и стоит в
+    # выдаче раньше — по ней легко проанализировать чужую конфигурацию. Поэтому
+    # настроенные экземпляры идём первыми, а заготовку помечаем явно.
+    configured = [o for o in opts if is_configured(o)]
+    blank = [o for o in opts if not is_configured(o)]
+    if not full:
+        # Короткая сводка (шапка отчёта) — только по настроенным экземплярам:
+        # строка про заготовку рядом с рабочей путает сильнее, чем помогает.
+        for o in (configured or opts):
+            print("опции: гистерезис %s, сила %s, упреждение %s, fanTempStep %s  (датчик %s / кондей %s)" % (
                 o.get("hysteresis"), o.get("acSmoothFactor"), o.get("acAnticipate"),
-                o.get("fanTempStep"), tag))
+                o.get("fanTempStep"), o.get("sensor", "?"), o.get("acThermostat", "?")))
+        return
+    for o in configured + blank:
+        if is_configured(o):
+            tag = f"датчик {o.get('sensor','?')} / кондей {o.get('acThermostat','?')}"
+        else:
+            tag = "НЕ НАСТРОЕН — незаполненная заготовка, значения дефолтные, для анализа не годятся"
+        print(f"\n=== Опции сценария ({tag}) ===")
+        for k in keys:
+            if k in o:
+                print(f"  {k:18} = {o[k]}")
 
 
 def print_doors(doors, win_lo, win_hi):
