@@ -12,7 +12,7 @@ let scenarioDescription = {
 info = {
     name: "🌡️ Виртуальный термостат",
     description: scenarioDescription.ru,
-    version: "3.11.5-ac",
+    version: "3.11.6-ac",
     author: "@BOOMikru (форк: поддержка кондиционера)",
     onStart: true,
 
@@ -1032,10 +1032,9 @@ function computeSmoothAcTemp(ac, state, service, options) {
     let anticipate = toNum(options.acAnticipate)
     if (anticipate == null || anticipate < 0) anticipate = 0
     const goalEff = anticipate > 0 ? (toNum(state) == 1 ? goal - anticipate : goal + anticipate) : goal
-    // Огрубляем до SMOOTH_TEMP_DECIMALS: иначе эпсилон плавающей точки (цель+упреждение
-    // не равно ожидаемому числу) решает, требуется холод или нет, — см. константу.
-    const scale = Math.pow(10, SMOOTH_TEMP_DECIMALS)
-    const raw = Math.round((acInternal + factor * (goalEff - ext)) * scale) / scale
+    // Огрубляем: иначе эпсилон плавающей точки (цель+упреждение не равно ожидаемому
+    // числу) решает, требуется холод или нет, — см. snapTemp и SMOOTH_TEMP_DECIMALS.
+    const raw = snapTemp(acInternal + factor * (goalEff - ext))
     // Округление не должно менять СМЫСЛ расчёта. Компрессор охлаждает, пока целевая ниже
     // собственного датчика кондея (при нагреве — выше). Если raw уже не ниже собственной,
     // спроса на холод нет — и Math.floor не имеет права превратить «простой» в «охлаждай»
@@ -1440,16 +1439,21 @@ function computeFanSpeedByDiff(service, options) {
     } else {
         signed = Math.abs(currentTemp - targetTemp)  // режим неизвестен — прежнее поведение
     }
-    const diff = signed > 0 ? signed : 0
+    // Огрубляем и разницу, и пороги: оба конца сравнения страдают от плавающей точки.
+    // Разница приходит вычитанием температур (24.8 − 24.6 = 0.1999999999999993), пороги —
+    // умножением шага (3 × 0.2 = 0.6000000000000001). Без огрубления физически одинаковая
+    // разница давала РАЗНУЮ ступень в зависимости от того, из каких чисел она получена:
+    // 24.6 − 24.4 → «Медленно», а 24.8 − 24.6 → «Тихо». См. snapTemp.
+    const diff = snapTemp(signed > 0 ? signed : 0)
 
     let speed = 1
-    if (diff >= 4 * fanTempStep) {
+    if (diff >= snapTemp(4 * fanTempStep)) {
         speed = 5
-    } else if (diff >= 3 * fanTempStep) {
+    } else if (diff >= snapTemp(3 * fanTempStep)) {
         speed = 4
-    } else if (diff >= 2 * fanTempStep) {
+    } else if (diff >= snapTemp(2 * fanTempStep)) {
         speed = 3
-    } else if (diff >= fanTempStep) {
+    } else if (diff >= snapTemp(fanTempStep)) {
         speed = 2
     }
     return { speed: speed, diff: diff, step: fanTempStep }
@@ -1894,6 +1898,13 @@ const AC_REASSERT_MAX = 3
 // здесь не мельче 0.1° (шаг датчика 0.1, упреждения 0.1, силы 0.5), так что шесть знаков
 // гасят только артефакты и не трогают ни одной осмысленной разницы.
 const SMOOTH_TEMP_DECIMALS = 6
+
+// Огрубляет температурную величину до SMOOTH_TEMP_DECIMALS знаков. Применять к ОБОИМ
+// сторонам сравнения: и вычисленная величина, и порог могут нести эпсилон.
+function snapTemp(x) {
+    const scale = Math.pow(10, SMOOTH_TEMP_DECIMALS)
+    return Math.round(x * scale) / scale
+}
 // Список ВСЕХ сервисов (любого типа), имеющих хотя бы одну из указанных
 // характеристик. Используется для выбора выключателя кондиционера: тип сервиса
 // питания у разных интеграций свой (Fan, Switch, кастомные).

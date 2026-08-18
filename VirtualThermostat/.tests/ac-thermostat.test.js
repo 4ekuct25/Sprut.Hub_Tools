@@ -276,6 +276,38 @@ describe('AC §"Вентилятор кондиционера"', () => {
     expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(1);
   });
 
+  it('порог ступени не зависит от того, ИЗ КАКИХ чисел получена разница (24.8−24.6)', ({ hub, scenario }) => {
+    // 24.8 − 24.6 в плавающей точке = 0.1999999999999993, то есть «меньше 0.2» → раньше Тихо,
+    // хотя разница ровно на пороге. При этом 24.6 − 24.4 = 0.20000000000000284 давало Медленно.
+    // Одинаковая физическая разница обязана давать одинаковую ступень.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.8, targetTemp: 24.6 });
+    const ac = makeAc(hub, 20, { fanSpeed: 1 });
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), fanTempStep: 0.2 }), freshVars(), 2);
+
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(2);
+  });
+
+  it('то же на границе 2×шага (25.0−24.6 = 0.4) → Средне, а не Медленно', ({ hub, scenario }) => {
+    // 25.0 − 24.6 = 0.3999999999999986, порог 2 × 0.2 = 0.4 — раньше не брался.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 25.0, targetTemp: 24.6 });
+    const ac = makeAc(hub, 20, { fanSpeed: 1 });
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), fanTempStep: 0.2 }), freshVars(), 2);
+
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(3);
+  });
+
+  it('разница ниже порога по-прежнему даёт нижнюю ступень (огрубление не «поехало»)', ({ hub, scenario }) => {
+    // Контроль: 24.7 − 24.6 = 0.1 — это честно меньше 0.2, ступень подниматься не должна.
+    const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 24.7, targetTemp: 24.6 });
+    const ac = makeAc(hub, 20, { fanSpeed: 1 });
+
+    runTrigger(scenario, t, baseOptions({ acThermostat: acUUID(ac), fanTempStep: 0.2 }), freshVars(), 2);
+
+    expect(ac.char(HS.Thermostat, HC.C_FanSpeed).getValue()).toBe(1);
+  });
+
   it('acFanControl=false → вентилятор не трогаем', ({ hub, scenario }) => {
     const t = makeThermostat(hub, 10, 2, 2, { currentTemp: 27, targetTemp: 24 });
     const ac = makeAc(hub, 20, { fanSpeed: 3 });
