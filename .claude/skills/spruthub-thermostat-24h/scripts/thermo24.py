@@ -49,10 +49,19 @@ DOORS = {
 DOOR_BUCKET_MIN = 30     # размер бакета, мин
 DOOR_OPEN_THRESH = 0.5   # доля открытого времени в бакете, чтобы считать «открыто»
 
-# Прод-уставки термостата (для коридора/цели на графике)
-TARGET = 24.3
-CORRIDOR = (24.0, 24.6)
-LOW_FLAG = 23.8   # отметить провалы комнаты ниже этого
+# Целевая температура ВИРТУАЛЬНОГО термостата (42.13, c_id=18) — её задаёт пользователь и
+# меняет когда угодно, поэтому она берётся из истории, а не держится константой. Раньше цель
+# и коридор были зашиты (24.3 ± 0.3) и регулярно устаревали: график рисовал коридор вокруг
+# несуществующей цели, а «провалы» считались от неё же — выводы получались красивые и неверные.
+TARGET_STREAM = (42, 13, 18)
+# Резерв на случай, если потока цели в архиве нет (перепривязка, обрезанная история).
+TARGET_FALLBACK = 24.3
+HYST_FALLBACK = 0.3
+# Правдоподобный диапазон целевой комнатной температуры. Отсекает промахи по слайдеру в UI:
+# 07.08.2026 цель на секунду улетела в 38° и вернулась — такой выброс растягивал бы коридор.
+TARGET_SANE = (10.0, 35.0)
+# На сколько градусов ниже цели помечать провалы комнаты точками.
+LOW_MARGIN = 0.5
 
 
 def find_latest_devinfo(folder):
@@ -142,6 +151,24 @@ def load_history(zip_path, hours, want_list=False, since=None):
         data[key] = [(datetime.utcfromtimestamp(t), v) for t, v in rows]
     end_local = datetime.utcfromtimestamp(mx / 1000 + off)
 
+    # Целевая температура — ступенчатый ряд с ЗАТРАВКОЙ (последнее значение ДО окна).
+    # Без затравки ряд пуст всякий раз, когда цель не меняли внутри окна, — а это обычный
+    # случай: её трогают раз в недели.
+    ta, ts_, tc = TARGET_STREAM
+    seed = con.execute(
+        f"select value from allh where a_id={ta} and s_id={ts_} and c_id={tc} "
+        f"and timestamp<={lo} order by timestamp desc limit 1").fetchone()
+    trows = con.execute(
+        f"select (timestamp/1000+{off}) ts, value from allh "
+        f"where a_id={ta} and s_id={ts_} and c_id={tc} and timestamp>{lo} order by timestamp"
+    ).fetchall()
+    tgt = []
+    if seed is not None:
+        tgt.append((datetime.utcfromtimestamp(lo / 1000 + off), seed[0]))
+    tgt += [(datetime.utcfromtimestamp(t), v) for t, v in trows]
+    data["target"] = [(t, v) for t, v in tgt
+                      if v is not None and TARGET_SANE[0] <= v <= TARGET_SANE[1]]
+
     # Двери: непрерывная реконструкция состояния (затравка + перенос)
     doors = {}
     lo_s, mx_s = lo / 1000 + off, mx / 1000 + off
@@ -211,7 +238,22 @@ def door_open_buckets(intervals, bucket_min, thresh):
     return merged
 
 
-def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None,
+def _stepper(series):
+    """Возвращает функцию «значение ступенчатого ряда на момент t» (последнее событие до t)."""
+    pts = sorted(series, key=lambda p: p[0])
+
+    def at(t):
+        v = pts[0][1]
+        for t0, x in pts:
+            if t0 <= t:
+                v = x
+            else:
+                break
+        return v
+    return at
+
+
+def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None, hyst=HYST_FALLBACK,
                 door_bucket=DOOR_BUCKET_MIN, door_thresh=DOOR_OPEN_THRESH):
     import matplotlib
     matplotlib.use("Agg")
@@ -230,8 +272,23 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None,
     fig, ax = plt.subplots(figsize=(13, 7), dpi=135)
     fig.patch.set_facecolor("white")
 
-    ax.axhspan(CORRIDOR[0], CORRIDOR[1], color="#33cc88", alpha=0.10, zorder=0)
-    ax.axhline(TARGET, color="#199e70", ls="--", lw=1.3, zorder=2, label=f"цель {TARGET}°")
+    # Цель и коридор — по ФАКТИЧЕСКОЙ цели из истории, ступенчато: она менялась прямо
+    # внутри окон, которые мы разбираем (24.3 → 24.4 → 24.0 → 25.0 за август).
+    tgt_series = data.get("target") or []
+    if tgt_series:
+        tx = [t for t, _ in tgt_series] + [end_local]
+        tv = [v for _, v in tgt_series] + [tgt_series[-1][1]]
+        ax.fill_between(tx, [v - hyst for v in tv], [v + hyst for v in tv],
+                        step="post", color="#33cc88", alpha=0.10, zorder=0)
+        ax.step(tx, tv, where="post", color="#199e70", ls="--", lw=1.3, zorder=2,
+                label="цель (по истории) ±%.1f" % hyst)
+        low_at = _stepper(tgt_series)
+    else:
+        ax.axhspan(TARGET_FALLBACK - hyst, TARGET_FALLBACK + hyst,
+                   color="#33cc88", alpha=0.10, zorder=0)
+        ax.axhline(TARGET_FALLBACK, color="#199e70", ls="--", lw=1.3, zorder=2,
+                   label=f"цель {TARGET_FALLBACK}° (резерв: в архиве нет потока цели)")
+        low_at = lambda _t: TARGET_FALLBACK
 
     # подсветка «дверь открыта» — агрегированно по бакетам (основное состояние)
     if doors:
@@ -246,10 +303,12 @@ def build_chart(data, end_local, out_png, ymin, ymax, x_from, x_to, doors=None,
     cx, cy = xy("ac_cur"); ax.plot(cx, cy, color="#d8742a", lw=1.2, alpha=.8, label="датчик кондея (внутр.)")
     tx, tv = xy("ac_tgt"); ax.step(tx, tv, where="post", color="#b5611f", lw=1.5, ls=(0, (5, 2)), label="целевая кондея")
     rx, ry = xy("room");   ax.plot(rx, ry, color="#1f6fd6", lw=2.4, zorder=5, label="комната (внешн. датчик)")
-    lx = [t for t, v in data["room"] if v < LOW_FLAG]
-    ly = [v for _, v in data["room"] if v < LOW_FLAG]
+    # Провалы отмечаем относительно цели, действовавшей В ЭТОТ момент, а не от константы.
+    lx = [t for t, v in data["room"] if v < low_at(t) - LOW_MARGIN]
+    ly = [v for t, v in data["room"] if v < low_at(t) - LOW_MARGIN]
     if lx:
-        ax.scatter(lx, ly, s=40, color="#e34948", zorder=6, label=f"комната <{LOW_FLAG}°")
+        ax.scatter(lx, ly, s=40, color="#e34948", zorder=6,
+                   label="комната ниже цели на %.1f°+" % LOW_MARGIN)
 
     ax.set_ylim(ymin, ymax); ax.set_ylabel("температура, °C"); ax.grid(axis="y", alpha=.2)
 
@@ -422,11 +481,26 @@ def main():
                                                        since=a.since)
     if a.list:
         return
+    # Гистерезис задаёт ширину коридора на графике — берём живой, из настроенного
+    # экземпляра сценария, а не константу (она устаревала и приукрашивала картину).
+    hyst = HYST_FALLBACK
     try:
-        print_options(load_scenario_options(zip_path), full=False)
+        opts = load_scenario_options(zip_path)
+        print_options(opts, full=False)
+        live = [o for o in opts if is_configured(o)]
+        if live and live[0].get("hysteresis") is not None:
+            hyst = float(live[0]["hysteresis"])
     except Exception:
         pass
     print_doors(doors, start_local, end_local)
+    tgt = data.get("target") or []
+    if tgt:
+        vals = sorted(set(v for _, v in tgt))
+        print("цель за окно: %s | коридор ±%.1f" % (
+            ", ".join("%.1f" % v for v in vals), hyst))
+    else:
+        print("цель: в архиве нет потока %s — на графике резерв %.1f±%.1f" % (
+            ".".join(str(x) for x in TARGET_STREAM), TARGET_FALLBACK, hyst))
     print("окно: %s .. %s (%.1f сут)" % (start_local.strftime("%Y-%m-%d %H:%M"),
                                          end_local.strftime("%Y-%m-%d %H:%M"),
                                          (end_local - start_local).total_seconds() / 86400))
@@ -437,7 +511,7 @@ def main():
                     else f"vt_last24h_{stamp}.png")
     out = a.out or os.path.join(outdir, default_name)
     build_chart(data, end_local, out, a.ymin, a.ymax, a.x_from, a.x_to, doors=doors,
-                door_bucket=a.door_bucket, door_thresh=a.door_thresh)
+                hyst=hyst, door_bucket=a.door_bucket, door_thresh=a.door_thresh)
 
 
 if __name__ == "__main__":
